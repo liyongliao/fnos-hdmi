@@ -1,7 +1,9 @@
 .env
+compose.override.yaml
 guacamole/user-mapping.xml
 .hdmi-diagnostics/
 hdmi-*-live.log
 hdmi-*-live.pid
 *.tar
 *.tar.gz
+fnos-remote-login*.rdp

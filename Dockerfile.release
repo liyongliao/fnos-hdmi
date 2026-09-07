@@ -9,6 +9,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ubuntu-desktop-minimal gdm3 gnome-remote-desktop \
       gnome-keyring libpam-gnome-keyring polkitd pkexec openssl \
+      bindfs \
       language-pack-zh-hans language-pack-zh-hans-base \
       language-pack-gnome-zh-hans language-pack-gnome-zh-hans-base \
       fonts-noto-cjk ibus ibus-libpinyin \
@@ -17,6 +18,7 @@ RUN apt-get update \
       systemd-udevd-varlink.socket tpm-udev.path tpm-udev.service \
  && locale-gen zh_CN.UTF-8 \
  && update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh \
+ && printf 'user_allow_other\n' >/etc/fuse.conf \
  && rm -rf /var/lib/apt/lists/*
 
 RUN if id remote >/dev/null 2>&1; then userdel -r remote; fi

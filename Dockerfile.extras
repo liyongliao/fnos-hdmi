@@ -8,14 +8,13 @@ ARG CHROME_DEB_URL=https://dl.google.com/linux/direct/google-chrome-stable_curre
 
 USER root
 
-# Optional desktop applications are kept in a derived image so recreating the
-# container never loses them and the existing offline base image remains usable.
+# The derived image always adds bindfs for safe fnOS storage access. Optional
+# desktop applications are layered here too, so the offline base stays intact.
 RUN set -eux; \
     case "$INSTALL_APP_STORE" in true|false) ;; *) exit 2 ;; esac; \
     case "$INSTALL_GOOGLE_CHROME" in true|false) ;; *) exit 2 ;; esac; \
-    if [ "$INSTALL_APP_STORE" = true ] || [ "$INSTALL_GOOGLE_CHROME" = true ]; then \
-      apt-get update; \
-    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends bindfs; \
     if [ "$INSTALL_APP_STORE" = true ]; then \
       apt-get install -y --no-install-recommends gnome-software; \
     fi; \
@@ -26,5 +25,5 @@ RUN set -eux; \
       apt-get install -y --no-install-recommends /tmp/google-chrome.deb; \
       rm -f /tmp/google-chrome.deb; \
     fi; \
+    printf 'user_allow_other\n' >/etc/fuse.conf; \
     rm -rf /var/lib/apt/lists/*
-

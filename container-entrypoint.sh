@@ -14,9 +14,22 @@ fi
 # Ubuntu SVG logo.
 glib-compile-schemas /usr/share/glib-2.0/schemas
 
+# The container can see the host kernel's block-device metadata through sysfs
+# and /run/udev, but Docker intentionally does not expose the corresponding
+# /dev/dm-* nodes. Letting udisks enumerate those host volumes creates
+# misleading Nautilus entries which cannot be mounted safely from here.
+# Host storage is exposed as ordinary bind mounts by setup-storage.sh instead.
+if [[ "${DISABLE_UDISKS:-true}" == true ]]; then
+  install -d -m 0755 /run/systemd/system
+  ln -sfn /dev/null /run/systemd/system/udisks2.service
+fi
+
 # Select exactly one GNOME RDP role.  Remote Login must own the system daemon
 # and must not race the per-user Desktop Sharing service.
 remote_mode="${REMOTE_MODE:-both}"
+desktop_user="${DESKTOP_USER:-ubuntu}"
+desktop_uid="${DESKTOP_UID:-1000}"
+desktop_gid="${DESKTOP_GID:-1000}"
 case "$remote_mode" in
   login)
     rm -f /etc/systemd/system/graphical.target.wants/fnos-desktop-sharing.service
@@ -36,10 +49,6 @@ case "$remote_mode" in
     ;;
 esac
 
-desktop_user="${DESKTOP_USER:-ubuntu}"
-desktop_uid="${DESKTOP_UID:-1000}"
-desktop_gid="${DESKTOP_GID:-1000}"
-
 # systemd deliberately starts services with a clean environment.  Keep the
 # Compose values in /run (tmpfs) so the boot-time sharing service can read them
 # without persisting the desktop password in the image.
@@ -47,6 +56,8 @@ umask 077
 {
   printf 'DESKTOP_USER=%q\n' "$desktop_user"
   printf 'DESKTOP_PASSWORD=%q\n' "${DESKTOP_PASSWORD:-}"
+  printf 'REMOTE_LOGIN_USER=%q\n' "${REMOTE_LOGIN_USER:-$desktop_user}"
+  printf 'REMOTE_LOGIN_PASSWORD=%q\n' "${REMOTE_LOGIN_PASSWORD:-${DESKTOP_PASSWORD:-}}"
   printf 'DESKTOP_SHARING_PORT=%q\n' "${DESKTOP_SHARING_PORT:-3390}"
   printf 'SCREEN_SHARE_MODE=%q\n' "${SCREEN_SHARE_MODE:-mirror-primary}"
 } >/run/fnos-desktop.env
@@ -94,6 +105,51 @@ actual_uid="$(id -u "$desktop_user")"
 actual_gid="$(id -g "$desktop_user")"
 install -d -o "$actual_uid" -g "$actual_gid" "/home/$desktop_user"
 chown "$actual_uid:$actual_gid" "/home/$desktop_user"
+
+# fnOS trimacl permissions are intentionally enforced on /volN even when the
+# numeric UID matches. A small bindfs view lets the desktop user access only
+# the explicitly bind-mounted /volN/<uid> trees without changing host ACLs.
+storage_raw_root="${NAS_STORAGE_RAW_ROOT:-/mnt/fnos-raw}"
+storage_root="${NAS_STORAGE_ROOT:-/mnt/fnos}"
+if [[ -d "$storage_raw_root" ]]; then
+  if ! command -v bindfs >/dev/null; then
+    echo "NAS storage is configured but bindfs is missing from the image." >&2
+    exit 6
+  fi
+  install -d -m 0755 "$storage_root"
+  shopt -s nullglob
+  for raw_storage_path in "$storage_raw_root"/*; do
+    [[ -d "$raw_storage_path" ]] || continue
+    storage_name="${raw_storage_path##*/}"
+    storage_path="$storage_root/$storage_name"
+    install -d -m 0755 "$storage_path"
+    bindfs \
+      --force-user="$actual_uid" \
+      --force-group="$actual_gid" \
+      --perms='u=rwX:g=:o=' \
+      --create-for-user="${NAS_BACKING_UID:-$actual_uid}" \
+      --create-for-group="${NAS_BACKING_GID:-$actual_gid}" \
+      --create-with-perms='u=rwX:g=rwX:o=' \
+      --chown-ignore --chgrp-ignore --chmod-ignore --xattr-ro \
+      -o allow_other "$raw_storage_path" "$storage_path"
+  done
+  shopt -u nullglob
+fi
+
+# Add friendly home-directory shortcuts for each prepared NAS storage view.
+if [[ -d "$storage_root" ]]; then
+  shopt -s nullglob
+  for storage_path in "$storage_root"/*; do
+    [[ -d "$storage_path" ]] || continue
+    storage_name="${storage_path##*/}"
+    shortcut="/home/$desktop_user/NAS-$storage_name"
+    if [[ ! -e "$shortcut" && ! -L "$shortcut" ]]; then
+      ln -s "$storage_path" "$shortcut"
+      chown -h "$actual_uid:$actual_gid" "$shortcut"
+    fi
+  done
+  shopt -u nullglob
+fi
 
 install -d -m 0755 /var/lib/AccountsService/users
 cat >"/var/lib/AccountsService/users/$desktop_user" <<EOF

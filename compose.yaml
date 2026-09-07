@@ -37,10 +37,14 @@ services:
       DESKTOP_UID: ${DESKTOP_UID:-1000}
       DESKTOP_GID: ${DESKTOP_GID:-1000}
       DESKTOP_PASSWORD: ${DESKTOP_PASSWORD:?set DESKTOP_PASSWORD in .env}
+      REMOTE_LOGIN_USER: ${REMOTE_LOGIN_USER:-${DESKTOP_USER:-ubuntu}}
+      REMOTE_LOGIN_PASSWORD: ${REMOTE_LOGIN_PASSWORD:-${DESKTOP_PASSWORD}}
       AUTO_LOGIN: ${AUTO_LOGIN:-false}
       REMOTE_MODE: ${REMOTE_MODE:-both}
       SCREEN_SHARE_MODE: ${SCREEN_SHARE_MODE:-mirror-primary}
       DESKTOP_SHARING_PORT: 3390
+      DISABLE_UDISKS: ${DISABLE_UDISKS:-true}
+      NAS_STORAGE_ROOT: /mnt/fnos
     ports:
       # The common RDP ports always mirror the active HDMI Wayland desktop.
       - "${RDP_PORT:-3389}:3390"

@@ -16,12 +16,14 @@ RUN apt-get update \
       polkitd pkexec openssl \
       mesa-utils mesa-vulkan-drivers libgl1-mesa-dri \
       pipewire pipewire-audio wireplumber alsa-utils pavucontrol \
+      bindfs \
       fonts-noto-cjk \
       language-pack-zh-hans language-pack-zh-hans-base \
       language-pack-gnome-zh-hans language-pack-gnome-zh-hans-base \
       ibus ibus-libpinyin \
  && locale-gen zh_CN.UTF-8 \
  && update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh \
+ && printf 'user_allow_other\n' >/etc/fuse.conf \
  && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
  && echo Asia/Shanghai >/etc/timezone \
  && systemctl set-default graphical.target \

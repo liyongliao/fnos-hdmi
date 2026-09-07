@@ -1,0 +1,112 @@
+services:
+  ubuntu26-gnome-hdmi:
+    image: ${DESKTOP_IMAGE:-fnos-ubuntu26-gnome-hdmi:wayland-zh}
+    pull_policy: never
+    container_name: ubuntu26-gnome-hdmi
+    hostname: ubuntu26-hdmi
+    cap_add:
+      - SYS_ADMIN
+      - SYS_TTY_CONFIG
+      - SYS_NICE
+    security_opt:
+      # fnOS AppArmor otherwise blocks remounting the container's private
+      # cgroup namespace read-write before systemd starts.
+      - apparmor=unconfined
+      # GNOME 50 delegates image decoding to glycin. Its bubblewrap sandbox
+      # needs pivot_root/mount syscalls blocked by Docker's default profile;
+      # without this, the desktop background and SVG application icons vanish.
+      - seccomp=unconfined
+    # Keep systemd's cgroups inside the container namespace.  Never give the
+    # container a writable view of the host's complete cgroup tree.
+    cgroup: private
+    tty: true
+    stdin_open: true
+    stop_signal: SIGRTMIN+3
+    stop_grace_period: 20s
+    restart: unless-stopped
+    mem_limit: ${MEMORY_LIMIT:-4g}
+    memswap_limit: ${MEMORY_LIMIT:-4g}
+    pids_limit: ${PIDS_LIMIT:-2048}
+    environment:
+      container: docker
+      TZ: Asia/Shanghai
+      LANG: zh_CN.UTF-8
+      LANGUAGE: zh_CN:zh
+      LC_ALL: zh_CN.UTF-8
+      DESKTOP_USER: ${DESKTOP_USER:-ubuntu}
+      DESKTOP_UID: ${DESKTOP_UID:-1000}
+      DESKTOP_GID: ${DESKTOP_GID:-1000}
+      DESKTOP_PASSWORD: ${DESKTOP_PASSWORD:?set DESKTOP_PASSWORD in .env}
+      AUTO_LOGIN: ${AUTO_LOGIN:-false}
+      REMOTE_MODE: ${REMOTE_MODE:-both}
+      SCREEN_SHARE_MODE: ${SCREEN_SHARE_MODE:-mirror-primary}
+      DESKTOP_SHARING_PORT: 3390
+    ports:
+      # The common RDP ports always mirror the active HDMI Wayland desktop.
+      - "${RDP_PORT:-3389}:3390"
+      - "${DESKTOP_SHARING_PORT:-3390}:3390"
+      # GNOME system Remote Login remains available separately. Some Microsoft
+      # clients fail its GDM handover, so it is not the default endpoint.
+      - "${REMOTE_LOGIN_PORT:-3391}:3389"
+    volumes:
+      - ${DESKTOP_HOME:-/vol1/1000/docker/ubuntu}:/home/${DESKTOP_USER:-ubuntu}
+      - ./container-entrypoint.sh:/usr/local/sbin/container-entrypoint:ro
+      - ./enable-desktop-sharing.sh:/usr/local/sbin/enable-desktop-sharing:ro
+      - ./enable-remote-login.sh:/usr/local/sbin/enable-remote-login:ro
+      - ./99-fnos-login-screen.gschema.override:/usr/share/glib-2.0/schemas/99-fnos-login-screen.gschema.override:ro
+      - /dev/input:/dev/input
+      - /dev/snd:/dev/snd
+      - /run/udev:/run/udev:ro
+    devices:
+      # Expose only the physical display PF.  card1-card4 are SR-IOV VFs and
+      # must not be enumerated by Mutter/GDM.
+      - /dev/dri/card0:/dev/dri/card0
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/fuse:/dev/fuse
+    device_cgroup_rules:
+      - "c 13:* rmw"
+      - "c 116:* rmw"
+    tmpfs:
+      - /run:rw,nosuid,nodev,mode=755,size=256m
+      - /run/lock:rw,nosuid,nodev,noexec,mode=755,size=16m
+      - /tmp:rw,nosuid,nodev,mode=1777,size=1g
+    shm_size: 1gb
+
+  guacd:
+    image: guacamole/guacd:1.6.0
+    pull_policy: never
+    container_name: ubuntu26-guacd
+    profiles: ["web"]
+    restart: unless-stopped
+    mem_limit: ${GUACD_MEMORY_LIMIT:-256m}
+    memswap_limit: ${GUACD_MEMORY_LIMIT:-256m}
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  guacamole:
+    image: guacamole/guacamole:1.6.0
+    pull_policy: never
+    container_name: ubuntu26-guacamole
+    profiles: ["web"]
+    restart: unless-stopped
+    mem_limit: ${WEB_MEMORY_LIMIT:-768m}
+    memswap_limit: ${WEB_MEMORY_LIMIT:-768m}
+    pids_limit: 512
+    depends_on:
+      - guacd
+      - ubuntu26-gnome-hdmi
+    environment:
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: 4822
+      GUACAMOLE_HOME: /etc/guacamole/custom
+      WEBAPP_CONTEXT: ROOT
+      JAVA_OPTS: -Xms64m -Xmx384m
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    volumes:
+      - ./guacamole:/etc/guacamole/custom:ro
+
+networks:
+  default:
+    driver: bridge

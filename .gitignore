@@ -1,0 +1,7 @@
+.env
+guacamole/user-mapping.xml
+.hdmi-diagnostics/
+hdmi-*-live.log
+hdmi-*-live.pid
+*.tar
+*.tar.gz

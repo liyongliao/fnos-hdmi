@@ -1,0 +1,4 @@
+[org.gnome.login-screen]
+# Ubuntu's SVG logo can fail to create a texture in the headless GDM renderer.
+# GNOME Shell 50 then aborts LoginDialog construction and shows a blank screen.
+logo=''

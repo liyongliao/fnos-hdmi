@@ -1,0 +1,54 @@
+FROM fnos-ubuntu26-gnome-hdmi:zh-wayland
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get purge -y \
+      xrdp xorgxrdp xfce4 xfce4-goodies lightdm lightdm-gtk-greeter \
+ && apt-get autoremove -y --purge \
+ && apt-get install -y --no-install-recommends \
+      ubuntu-desktop-minimal gdm3 gnome-remote-desktop \
+      gnome-keyring libpam-gnome-keyring polkitd pkexec openssl \
+      language-pack-zh-hans language-pack-zh-hans-base \
+      language-pack-gnome-zh-hans language-pack-gnome-zh-hans-base \
+      fonts-noto-cjk ibus ibus-libpinyin \
+ && systemctl enable gdm3 \
+ && systemctl mask systemd-udevd-control.socket systemd-udevd-kernel.socket \
+      systemd-udevd-varlink.socket tpm-udev.path tpm-udev.service \
+ && locale-gen zh_CN.UTF-8 \
+ && update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN if id remote >/dev/null 2>&1; then userdel -r remote; fi
+
+COPY container-entrypoint.sh /usr/local/sbin/container-entrypoint
+COPY enable-desktop-sharing.sh /usr/local/sbin/enable-desktop-sharing
+COPY enable-remote-login.sh /usr/local/sbin/enable-remote-login
+COPY fnos-desktop-sharing.service /etc/systemd/system/fnos-desktop-sharing.service
+COPY fnos-remote-login.service /etc/systemd/system/fnos-remote-login.service
+COPY 99-fnos-login-screen.gschema.override /usr/share/glib-2.0/schemas/99-fnos-login-screen.gschema.override
+RUN chmod 0755 /usr/local/sbin/container-entrypoint \
+               /usr/local/sbin/enable-desktop-sharing \
+               /usr/local/sbin/enable-remote-login \
+ && chmod 0644 /etc/systemd/system/fnos-desktop-sharing.service \
+               /etc/systemd/system/fnos-remote-login.service \
+ && glib-compile-schemas /usr/share/glib-2.0/schemas \
+ && mkdir -p /etc/systemd/logind.conf.d \
+ && printf '%s\n' \
+      '[Login]' \
+      'HandlePowerKey=ignore' \
+      'HandlePowerKeyLongPress=ignore' \
+      'HandleRebootKey=ignore' \
+      'HandleRebootKeyLongPress=ignore' \
+      'HandleSuspendKey=ignore' \
+      'HandleHibernateKey=ignore' \
+      'HandleLidSwitch=ignore' \
+      >/etc/systemd/logind.conf.d/10-container-ignore-power.conf \
+ && systemctl enable fnos-desktop-sharing.service \
+                    fnos-remote-login.service \
+                    gnome-remote-desktop.service
+
+ENV LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh LC_ALL=zh_CN.UTF-8
+EXPOSE 3389/tcp 3390/tcp
+ENTRYPOINT ["/usr/local/sbin/container-entrypoint"]
+CMD ["/sbin/init"]

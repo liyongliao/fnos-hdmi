@@ -1,0 +1,12 @@
+services:
+  ubuntu26-gnome-hdmi:
+    image: ${CUSTOM_DESKTOP_IMAGE:-fnos-ubuntu26-gnome-hdmi:wayland-zh-apps}
+    build:
+      context: .
+      dockerfile: Dockerfile.extras
+      args:
+        BASE_DESKTOP_IMAGE: ${BASE_DESKTOP_IMAGE:-fnos-ubuntu26-gnome-hdmi:wayland-zh}
+        INSTALL_APP_STORE: ${INSTALL_APP_STORE:-true}
+        INSTALL_GOOGLE_CHROME: ${INSTALL_GOOGLE_CHROME:-true}
+        CHROME_DEB_URL: ${CHROME_DEB_URL:-https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb}
+

@@ -1,0 +1,30 @@
+ARG BASE_DESKTOP_IMAGE=fnos-ubuntu26-gnome-hdmi:wayland-zh
+FROM ${BASE_DESKTOP_IMAGE}
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG INSTALL_APP_STORE=true
+ARG INSTALL_GOOGLE_CHROME=true
+ARG CHROME_DEB_URL=https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+
+USER root
+
+# Optional desktop applications are kept in a derived image so recreating the
+# container never loses them and the existing offline base image remains usable.
+RUN set -eux; \
+    case "$INSTALL_APP_STORE" in true|false) ;; *) exit 2 ;; esac; \
+    case "$INSTALL_GOOGLE_CHROME" in true|false) ;; *) exit 2 ;; esac; \
+    if [ "$INSTALL_APP_STORE" = true ] || [ "$INSTALL_GOOGLE_CHROME" = true ]; then \
+      apt-get update; \
+    fi; \
+    if [ "$INSTALL_APP_STORE" = true ]; then \
+      apt-get install -y --no-install-recommends gnome-software; \
+    fi; \
+    if [ "$INSTALL_GOOGLE_CHROME" = true ]; then \
+      test "$(dpkg --print-architecture)" = amd64; \
+      apt-get install -y --no-install-recommends ca-certificates curl; \
+      curl --fail --location --retry 3 --output /tmp/google-chrome.deb "$CHROME_DEB_URL"; \
+      apt-get install -y --no-install-recommends /tmp/google-chrome.deb; \
+      rm -f /tmp/google-chrome.deb; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+

@@ -1,0 +1,11 @@
+[Unit]
+Description=Configure GNOME remote login
+Before=gnome-remote-desktop.service gdm3.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/enable-remote-login
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

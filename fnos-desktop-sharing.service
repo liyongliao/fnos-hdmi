@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure GNOME Wayland desktop sharing
+After=gdm3.service systemd-logind.service
+Wants=gdm3.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/enable-desktop-sharing
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=graphical.target

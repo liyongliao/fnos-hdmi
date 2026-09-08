@@ -1,0 +1,10 @@
+# Optional host-safety resource ceiling.
+# Default desktop-computer mode does not use this file.
+#
+# Docker memswap_limit is RAM + swap TOTAL, so keep it greater than mem_limit
+# if you want the container to have swap headroom.
+services:
+  ubuntu26-gnome-hdmi:
+    mem_limit: ${DESKTOP_MEMORY_LIMIT:-12g}
+    memswap_limit: ${DESKTOP_MEMORY_SWAP_LIMIT:-16g}
+    pids_limit: ${DESKTOP_PIDS_LIMIT:-16384}

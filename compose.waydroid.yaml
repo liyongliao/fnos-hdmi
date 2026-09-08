@@ -1,30 +1,8 @@
-# Set these to read-only loop devices allocated ONLY to the Android images.
-# Use setup-waydroid.py; its host service prepares devices after each reboot.
-services:
-  ubuntu26-gnome-hdmi:
-    # Do not auto-start with stale loop device numbers after a host reboot.
-    # The host service prepares the mappings, then starts this container.
-    restart: "no"
-
-    # Do not impose a separate RAM/PID ceiling for Waydroid. GNOME + GAPPS can
-    # legitimately exceed the previous 6 GiB / 8192 PID limits. Optional host
-    # safety ceilings belong in compose.resource-limits.yaml.
-
-    volumes:
-      - ./prepare-waydroid-android.py:/usr/local/sbin/prepare-waydroid-android.py:ro
-    cap_add:
-      - IPC_LOCK
-      - SYS_RESOURCE
-      - SYS_PTRACE
-      - DAC_READ_SEARCH
-      - BLOCK_SUSPEND
-    ulimits:
-      memlock:
-        soft: 1073741824
-        hard: 1073741824
-      nofile:
-        soft: 1048576
-        hard: 1048576
-    devices:
-      - ${WAYDROID_SYSTEM_LOOP:?prepare Android system loop}:/dev/waydroid-system:r
-      - ${WAYDROID_VENDOR_LOOP:?prepare Android vendor loop}:/dev/waydroid-vendor:r
+# Deprecated compatibility overlay.
+#
+# Waydroid now runs in the same Docker configuration from the first Ubuntu
+# boot onward. Android images are downloaded and mounted inside Ubuntu; no
+# WAYDROID_SYSTEM_LOOP/WAYDROID_VENDOR_LOOP variables or host-side container
+# recreation are required. Keeping this empty overlay avoids breaking old
+# commands that still mention `-f compose.waydroid.yaml`.
+services: {}

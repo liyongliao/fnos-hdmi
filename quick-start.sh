@@ -87,7 +87,7 @@ else
   echo "警告：fnOS 内核没有注册 binder 驱动，Waydroid 将无法运行。" >&2
 fi
 
-chmod +x preflight.sh prepare-guacamole.sh setup-storage.sh create-rdp-file.sh
+chmod +x preflight.sh prepare-guacamole.sh setup-storage.sh create-rdp-file.sh prepare-waydroid-runtime.sh
 ./preflight.sh
 ./setup-storage.sh
 
@@ -128,21 +128,38 @@ sudo docker compose config --quiet
 waydroid_requested="$(awk -F= '$1 == "INSTALL_WAYDROID" {print tolower($2); exit}' .env)"
 waydroid_requested="${waydroid_requested:-false}"
 
-if [[ "$waydroid_requested" == "true" ]]; then
-  # First boot is intentionally supported before Android images exist.
-  # setup-waydroid.py enables the host service and starts the ordinary Ubuntu
-  # desktop until system.img/vendor.img have been downloaded. Once they exist,
-  # the same command transparently switches to the loop-device overlay.
-  sudo python3 setup-waydroid.py --install-autostart
-  sudo docker compose --profile web up -d --no-deps guacd guacamole
-elif systemctl is-enabled --quiet fnos-waydroid-desktop.service 2>/dev/null; then
-  # Preserve an already configured Waydroid installation even if an older .env
-  # did not contain INSTALL_WAYDROID=true.
-  sudo python3 setup-waydroid.py
-  sudo docker compose --profile web up -d --no-deps guacd guacamole
-else
-  sudo docker compose --profile web up -d
+# Migrate the old two-stage host-loop implementation if this project created
+# it. The single-runtime design no longer needs a fnOS systemd service or
+# preallocated /dev/waydroid-system/vendor devices.
+legacy_unit=/etc/systemd/system/fnos-waydroid-desktop.service
+if sudo test -f "$legacy_unit" && sudo grep -q '^# Managed by setup-waydroid.py' "$legacy_unit"; then
+  echo "检测到旧版 Waydroid 双模式开机服务，正在迁移到单一运行模式……"
+  sudo systemctl disable --now fnos-waydroid-desktop.service 2>/dev/null || true
+  sudo rm -f "$legacy_unit"
+  sudo systemctl daemon-reload
+
+  waydroid_data_value="$(awk -F= '$1 == "WAYDROID_DATA" {print $2; exit}' .env)"
+  waydroid_data_value="${waydroid_data_value:-./waydroid-data}"
+  if [[ "$waydroid_data_value" = /* ]]; then
+    waydroid_data_dir="$waydroid_data_value"
+  else
+    waydroid_data_dir="$project_dir/${waydroid_data_value#./}"
+  fi
+  for android_img in "$waydroid_data_dir/images/system.img" "$waydroid_data_dir/images/vendor.img"; do
+    [[ -e "$android_img" ]] || continue
+    while read -r loopdev readonly; do
+      [[ -n "${loopdev:-}" ]] || continue
+      if [[ "${readonly:-0}" == "1" ]]; then
+        sudo losetup -d "$loopdev" 2>/dev/null || true
+      fi
+    done < <(sudo losetup --associated "$(readlink -f "$android_img")" --noheadings --output NAME,RO 2>/dev/null || true)
+  done
 fi
+
+# One Docker runtime from the first boot onward. If Waydroid is installed, it
+# downloads system.img/vendor.img inside Ubuntu and mounts them there directly;
+# no host SSH command and no later container recreation are required.
+sudo docker compose --profile web up -d --force-recreate
 
 server_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
   {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}
@@ -168,27 +185,10 @@ if [[ "$server_ip" != "fnOS-IP" ]]; then
 fi
 
 if [[ "$waydroid_requested" == "true" ]]; then
-  waydroid_data_value="$(awk -F= '$1 == "WAYDROID_DATA" {print $2; exit}' .env)"
-  waydroid_data_value="${waydroid_data_value:-./waydroid-data}"
-  if [[ "$waydroid_data_value" = /* ]]; then
-    waydroid_data_dir="$waydroid_data_value"
-  else
-    waydroid_data_dir="$project_dir/${waydroid_data_value#./}"
-  fi
-
-  if [[ ! -s "$waydroid_data_dir/waydroid.cfg" \
-        || ! -s "$waydroid_data_dir/images/system.img" \
-        || ! -s "$waydroid_data_dir/images/vendor.img" ]]; then
-    echo
-    echo "Waydroid 首次初始化尚未完成，但 Ubuntu 桌面已经可以正常使用。"
-    echo "  1. 先通过 HDMI、$server_ip:3389 或 http://$server_ip:8080/ 进入 Ubuntu。"
-    echo "  2. 在 Ubuntu 应用菜单启动 Waydroid，选择 Vanilla/GAPPS 并等待 Android 镜像下载完成。"
-    echo "  3. 返回 fnOS SSH 执行："
-    echo "     cd $project_dir"
-    echo "     sudo python3 setup-waydroid.py --install-autostart"
-    echo "  4. 脚本检测到 system.img/vendor.img 后会自动切换到完整 Waydroid 模式。"
-  else
-    echo
-    echo "Waydroid Android 镜像已存在，当前已按完整 Waydroid 模式启动。"
-  fi
+  echo
+  echo "Waydroid 已安装为单一运行模式："
+  echo "  1. 直接进入 Ubuntu 桌面并打开 Waydroid。"
+  echo "  2. 首次选择 Vanilla/GAPPS，Android 镜像会保存到 WAYDROID_DATA。"
+  echo "  3. 下载完成后 Waydroid 会在当前容器内直接挂载并启动。"
+  echo "  4. 不再需要执行 setup-waydroid.py，也不会为了 Waydroid 重建 GNOME 容器。"
 fi

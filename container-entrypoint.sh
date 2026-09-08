@@ -5,25 +5,32 @@ if [[ -f /usr/local/sbin/configure-waydroid.py ]]; then
   python3 /usr/local/sbin/configure-waydroid.py
 fi
 
-if [[ -b /dev/waydroid-system ]]; then
-  # Only the Docker-private network sysctls; never remount all /proc/sys.
-  mount --bind /proc/sys/net /proc/sys/net
-  mount -o remount,bind,rw /proc/sys/net
-  install -d /run/fnos-waydroid-base
-  mount -o ro /dev/waydroid-system /run/fnos-waydroid-base
-  python3 /usr/local/sbin/prepare-waydroid-android.py /run/fnos-waydroid-base
-  umount /run/fnos-waydroid-base
+# One runtime only: if Waydroid is installed, prepare loop device nodes inside
+# Docker's private /dev from the start. Linux loop devices are kernel-global,
+# but the cgroup rule in compose.yaml permits only block major 7 (loop), not
+# fnOS physical/LVM/NVMe disks. This lets util-linux mount system.img directly
+# without a host-side losetup + Docker recreate step.
+if command -v waydroid >/dev/null 2>&1; then
+  if [[ ! -e /dev/loop-control ]]; then
+    if ! mknod -m 0600 /dev/loop-control c 10 237; then
+      echo "WARNING: cannot create /dev/loop-control; Waydroid image mounting may fail." >&2
+    fi
+  fi
+  for loop_minor in $(seq 0 255); do
+    loop_node="/dev/loop${loop_minor}"
+    [[ -e "$loop_node" ]] || mknod -m 0600 "$loop_node" b 7 "$loop_minor" 2>/dev/null || true
+  done
 fi
 
 # Docker mounts a private cgroup v2 namespace read-only for non-privileged
-# containers on fnOS.  systemd needs to create init.scope below that private
+# containers on fnOS. systemd needs to create init.scope below that private
 # root; remount only this namespaced view instead of bind-mounting the host's
 # complete /sys/fs/cgroup tree.
 if ! test -w /sys/fs/cgroup; then
   mount -o remount,rw /sys/fs/cgroup
 fi
 
-# Compile the bind-mounted login-screen override before GDM starts.  It avoids
+# Compile the bind-mounted login-screen override before GDM starts. It avoids
 # a GNOME Shell 50 LoginDialog crash when its headless renderer cannot load the
 # Ubuntu SVG logo.
 glib-compile-schemas /usr/share/glib-2.0/schemas
@@ -38,7 +45,7 @@ if [[ "${DISABLE_UDISKS:-true}" == true ]]; then
   ln -sfn /dev/null /run/systemd/system/udisks2.service
 fi
 
-# Select exactly one GNOME RDP role.  Remote Login must own the system daemon
+# Select exactly one GNOME RDP role. Remote Login must own the system daemon
 # and must not race the per-user Desktop Sharing service.
 remote_mode="${REMOTE_MODE:-both}"
 for remote_unit in fnos-desktop-sharing.service fnos-remote-login.service; do
@@ -75,7 +82,7 @@ case "$remote_mode" in
     ;;
 esac
 
-# systemd deliberately starts services with a clean environment.  Keep the
+# systemd deliberately starts services with a clean environment. Keep the
 # Compose values in /run (tmpfs) so the boot-time sharing service can read them
 # without persisting the desktop password in the image.
 umask 077
@@ -108,7 +115,7 @@ getent group admin >/dev/null || groupadd --system admin
 usermod -aG sudo,admin,audio,video,input,render "$desktop_user"
 
 # Device group numbers come from fnOS and may map to different group names in
-# Ubuntu (for example fnOS render=105 while Ubuntu render=992).  Add the user
+# Ubuntu (for example fnOS render=105 while Ubuntu render=992). Add the user
 # to the groups owning the actual bind-mounted devices before GDM logs in.
 for device_path in /dev/dri/card0 /dev/dri/renderD128 /dev/input/event0 /dev/snd/controlC0; do
   [[ -e "$device_path" ]] || continue
@@ -187,7 +194,7 @@ EOF
 chmod 0600 "/var/lib/AccountsService/users/$desktop_user"
 
 # A local auto-login session occupies the same account and can make GDM reject
-# a Remote Login request.  Keep GDM at its login screen in system-login mode.
+# a Remote Login request. Keep GDM at its login screen in system-login mode.
 if [[ "$remote_mode" == login ]]; then
   auto_login=false
 else

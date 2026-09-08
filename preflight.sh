@@ -67,6 +67,30 @@ if [ -n "$binder_major" ]; then
   fi
 else
   echo "MISSING fnOS kernel binderfs support; Waydroid cannot run"
+  failed=1
+fi
+
+waydroid_requested=false
+if [ -f .env ] && grep -Eqi '^INSTALL_WAYDROID=true[[:space:]]*$' .env; then
+  waydroid_requested=true
+fi
+
+if [ "$waydroid_requested" = true ]; then
+  echo
+  echo "Waydroid single-runtime loop support:"
+  loop_major="$(awk '$2 == "loop" {print $1; exit}' /proc/devices)"
+  if [ -n "$loop_major" ]; then
+    echo "OK      Linux loop block driver is available (major $loop_major)"
+  else
+    echo "MISSING Linux loop driver; run 'sudo modprobe loop' on fnOS"
+    failed=1
+  fi
+  if grep -Fq '"c 10:237 rmw"' compose.yaml && grep -Fq '"b 7:* rmw"' compose.yaml; then
+    echo "OK      Compose allows only loop-control and loop block devices"
+  else
+    echo "MISSING Compose single-runtime loop device rules"
+    failed=1
+  fi
 fi
 
 exit "$failed"

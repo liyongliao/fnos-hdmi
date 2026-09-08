@@ -15,8 +15,10 @@ for required in "$cfg" "$base_prop" "$system_img" "$vendor_img"; do
   [[ -s "$required" ]] || exit 0
 done
 
-# Re-run preparation only when the system/vendor images or config changed.
-fingerprint="$({ stat -Lc '%n:%s:%Y' "$system_img" "$vendor_img" "$cfg" "$base_prop"; } | sha256sum | awk '{print $1}')"
+# Re-run only when an Android image itself changed. prepare-waydroid-android.py
+# intentionally rewrites waydroid.cfg/base.prop, so including their mtimes here
+# would make the marker change on every session.
+fingerprint="$({ stat -Lc '%n:%s:%Y' "$system_img" "$vendor_img"; } | sha256sum | awk '{print $1}')"
 if [[ -s "$marker" ]] && [[ "$(cat "$marker")" == "$fingerprint" ]]; then
   exit 0
 fi

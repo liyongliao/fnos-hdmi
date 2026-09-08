@@ -4,10 +4,13 @@ services:
     pull_policy: never
     container_name: ubuntu26-gnome-hdmi
     hostname: ubuntu26-hdmi
+
+    # Compatibility first: users can choose Docker privileged mode from .env.
+    # true  = maximum hardware/LXC/Waydroid compatibility.
+    # false = scoped capabilities + device rules below.
+    privileged: ${PRIVILEGED_MODE:-true}
+
     cap_add:
-      # GNOME/systemd plus nested Waydroid/LXC runtime capabilities. This is
-      # still deliberately narrower than privileged:true and does not expose
-      # unrelated fnOS block/GPU devices.
       - NET_ADMIN
       - SYS_ADMIN
       - SYS_TTY_CONFIG
@@ -19,27 +22,18 @@ services:
       - BLOCK_SUSPEND
       - MKNOD
     security_opt:
-      # fnOS AppArmor otherwise blocks remounting the container's private
-      # cgroup namespace read-write before systemd starts.
       - apparmor=unconfined
-      # GNOME 50 delegates image decoding to glycin. Its bubblewrap sandbox
-      # and nested LXC need syscalls blocked by Docker's default profile.
       - seccomp=unconfined
-    # Keep systemd's cgroups inside the container namespace. Never give the
-    # container a writable view of the host's complete cgroup tree.
     cgroup: private
     sysctls:
-      # Waydroid's bridge runs only in this private Docker network namespace.
+      # Waydroid creates waydroid0 inside this container. Docker bridge then
+      # provides the second NAT layer to fnOS/LAN/Internet.
       net.ipv4.ip_forward: "1"
     tty: true
     stdin_open: true
     stop_signal: SIGRTMIN+3
     stop_grace_period: 45s
     restart: unless-stopped
-
-    # Desktop-computer mode: do not hard-cap RAM, swap or PID count here.
-    # GNOME + browser + RDP + Waydroid/GAPPS can burst significantly. Optional
-    # host safety ceilings belong in compose.resource-limits.yaml.
 
     environment:
       container: docker
@@ -59,14 +53,20 @@ services:
       DESKTOP_SHARING_PORT: 3390
       DISABLE_UDISKS: ${DISABLE_UDISKS:-true}
       NAS_STORAGE_ROOT: /mnt/fnos
+      # In privileged mode Docker exposes every DRM node. Keep only the known
+      # physical display PF in the container /dev so Mutter does not enumerate
+      # fnOS SR-IOV VFs. Set false if another GPU is intentionally required.
+      LIMIT_GPU_DEVICES: ${LIMIT_GPU_DEVICES:-true}
+
     ports:
-      - "${RDP_PORT:-3389}:3390"
-      - "${DESKTOP_SHARING_PORT:-3390}:3390"
-      - "${REMOTE_LOGIN_PORT:-3391}:3389"
+      # BIND_ADDRESS=0.0.0.0 exposes services on all fnOS interfaces. Change it
+      # to a LAN/VPN IP when you want to bind more narrowly.
+      - "${BIND_ADDRESS:-0.0.0.0}:${RDP_PORT:-3389}:3390"
+      - "${BIND_ADDRESS:-0.0.0.0}:${DESKTOP_SHARING_PORT:-3390}:3390"
+      - "${BIND_ADDRESS:-0.0.0.0}:${REMOTE_LOGIN_PORT:-3391}:3389"
+
     volumes:
       - ${DESKTOP_HOME:-/vol1/1000/docker/ubuntu}:/home/${DESKTOP_USER:-ubuntu}
-      # Waydroid downloads and manages its own Android images here. The desktop
-      # container never has to be recreated when these files appear/update.
       - ${WAYDROID_DATA:-./waydroid-data}:/var/lib/waydroid
       - ./container-entrypoint.sh:/usr/local/sbin/container-entrypoint:ro
       - ./configure-waydroid.py:/usr/local/sbin/configure-waydroid.py:ro
@@ -80,24 +80,21 @@ services:
       - /dev/input:/dev/input
       - /dev/snd:/dev/snd
       - /run/udev:/run/udev:ro
+
     devices:
-      # Expose only the physical display PF. card1-card4 are SR-IOV VFs and
-      # must not be enumerated by Mutter/GDM.
       - /dev/dri/card0:/dev/dri/card0
       - /dev/dri/renderD128:/dev/dri/renderD128
       - /dev/fuse:/dev/fuse
+
+    # These rules matter when PRIVILEGED_MODE=false. In privileged mode Docker
+    # already grants device access, so keeping them is harmless.
     device_cgroup_rules:
       - "c 13:* rmw"
       - "c 116:* rmw"
-      # binderfs creates binder, hwbinder and vndbinder dynamically. fnOS 6.18
-      # currently assigns major 243; quick-start.sh detects the actual number.
       - "c ${BINDER_DEVICE_MAJOR:-243}:* rmw"
-      # Single-runtime Waydroid support. util-linux mount allocates loop devices
-      # for system.img/vendor.img inside this container. Major 7 is loop only;
-      # physical fnOS disks (dm/nvme/sd) remain blocked. loop-control is the
-      # standard misc char device 10:237 and is created in the private /dev.
       - "c 10:237 rmw"
       - "b 7:* rmw"
+
     ulimits:
       memlock:
         soft: 1073741824
@@ -105,6 +102,7 @@ services:
       nofile:
         soft: 1048576
         hard: 1048576
+
     tmpfs:
       - /run:rw,nosuid,nodev,mode=755,size=512m
       - /run/lock:rw,nosuid,nodev,noexec,mode=755,size=32m
@@ -140,7 +138,7 @@ services:
       WEBAPP_CONTEXT: ROOT
       JAVA_OPTS: -Xms64m -Xmx512m
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "${BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8080}:8080"
     volumes:
       - ./guacamole:/etc/guacamole/custom:ro
 

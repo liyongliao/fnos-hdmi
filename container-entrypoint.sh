@@ -1,15 +1,29 @@
 #!/bin/bash
 set -euo pipefail
 
+# privileged=true exposes all host DRM nodes. On fnOS systems with i915 SR-IOV
+# VFs this can confuse GDM/Mutter. Removing device nodes here affects only the
+# container's private /dev, never the fnOS host. Users can disable this filter
+# with LIMIT_GPU_DEVICES=false when they intentionally need another GPU.
+if [[ "${LIMIT_GPU_DEVICES:-true}" == true && -d /dev/dri ]]; then
+  shopt -s nullglob
+  for node in /dev/dri/card*; do
+    [[ "$node" == /dev/dri/card0 ]] || rm -f "$node" || true
+  done
+  for node in /dev/dri/renderD*; do
+    [[ "$node" == /dev/dri/renderD128 ]] || rm -f "$node" || true
+  done
+  shopt -u nullglob
+fi
+
 if [[ -f /usr/local/sbin/configure-waydroid.py ]]; then
   python3 /usr/local/sbin/configure-waydroid.py
 fi
 
 # One runtime only: if Waydroid is installed, prepare loop device nodes inside
-# Docker's private /dev from the start. Linux loop devices are kernel-global,
-# but the cgroup rule in compose.yaml permits only block major 7 (loop), not
-# fnOS physical/LVM/NVMe disks. This lets util-linux mount system.img directly
-# without a host-side losetup + Docker recreate step.
+# Docker's private /dev from the start. In privileged mode the nodes normally
+# already exist; in scoped mode the cgroup rules + MKNOD capability allow these
+# loop-only nodes to be created without exposing fnOS physical disks.
 if command -v waydroid >/dev/null 2>&1; then
   if [[ ! -e /dev/loop-control ]]; then
     if ! mknod -m 0600 /dev/loop-control c 10 237; then
@@ -37,9 +51,7 @@ glib-compile-schemas /usr/share/glib-2.0/schemas
 
 # The container can see the host kernel's block-device metadata through sysfs
 # and /run/udev, but Docker intentionally does not expose the corresponding
-# /dev/dm-* nodes. Letting udisks enumerate those host volumes creates
-# misleading Nautilus entries which cannot be mounted safely from here.
-# Host storage is exposed as ordinary bind mounts by setup-storage.sh instead.
+# /dev/dm-* nodes in scoped mode. Host storage is exposed by setup-storage.sh.
 if [[ "${DISABLE_UDISKS:-true}" == true ]]; then
   install -d -m 0755 /run/systemd/system
   ln -sfn /dev/null /run/systemd/system/udisks2.service
@@ -73,8 +85,6 @@ case "$remote_mode" in
       /etc/systemd/system/graphical.target.wants/gnome-remote-desktop.service
     ;;
   both)
-    # Keep both units: system Remote Login owns 3389 while the user desktop
-    # sharing daemon owns 3390.
     ;;
   *)
     echo "REMOTE_MODE must be 'both', 'login' or 'share'" >&2
@@ -82,9 +92,8 @@ case "$remote_mode" in
     ;;
 esac
 
-# systemd deliberately starts services with a clean environment. Keep the
-# Compose values in /run (tmpfs) so the boot-time sharing service can read them
-# without persisting the desktop password in the image.
+# systemd deliberately starts services with a clean environment. Keep Compose
+# values in /run so boot-time sharing services can read them.
 umask 077
 {
   printf 'DESKTOP_USER=%q\n' "$desktop_user"
@@ -115,8 +124,7 @@ getent group admin >/dev/null || groupadd --system admin
 usermod -aG sudo,admin,audio,video,input,render "$desktop_user"
 
 # Device group numbers come from fnOS and may map to different group names in
-# Ubuntu (for example fnOS render=105 while Ubuntu render=992). Add the user
-# to the groups owning the actual bind-mounted devices before GDM logs in.
+# Ubuntu. Add the user to groups owning the actual visible devices before GDM.
 for device_path in /dev/dri/card0 /dev/dri/renderD128 /dev/input/event0 /dev/snd/controlC0; do
   [[ -e "$device_path" ]] || continue
   device_gid="$(stat -c '%g' "$device_path")"
@@ -140,8 +148,7 @@ install -d -o "$actual_uid" -g "$actual_gid" "/home/$desktop_user"
 chown "$actual_uid:$actual_gid" "/home/$desktop_user"
 
 # fnOS trimacl permissions are intentionally enforced on /volN even when the
-# numeric UID matches. A small bindfs view lets the desktop user access only
-# the explicitly bind-mounted /volN/<uid> trees without changing host ACLs.
+# numeric UID matches. bindfs exposes only explicitly mapped user directories.
 storage_raw_root="${NAS_STORAGE_RAW_ROOT:-/mnt/fnos-raw}"
 storage_root="${NAS_STORAGE_ROOT:-/mnt/fnos}"
 if [[ -d "$storage_raw_root" ]]; then
@@ -169,7 +176,6 @@ if [[ -d "$storage_raw_root" ]]; then
   shopt -u nullglob
 fi
 
-# Add friendly home-directory shortcuts for each prepared NAS storage view.
 if [[ -d "$storage_root" ]]; then
   shopt -s nullglob
   for storage_path in "$storage_root"/*; do
@@ -193,8 +199,6 @@ SystemAccount=false
 EOF
 chmod 0600 "/var/lib/AccountsService/users/$desktop_user"
 
-# A local auto-login session occupies the same account and can make GDM reject
-# a Remote Login request. Keep GDM at its login screen in system-login mode.
 if [[ "$remote_mode" == login ]]; then
   auto_login=false
 else

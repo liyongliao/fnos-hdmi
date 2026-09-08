@@ -79,16 +79,11 @@ else
   mv "$tmp_env" .env
   chmod 0600 .env
 
-  # Old .env files predate these options. Add compatibility-first defaults
-  # without overwriting values already selected by the user.
   grep -q '^PRIVILEGED_MODE=' .env || echo 'PRIVILEGED_MODE=true' >>.env
   grep -q '^LIMIT_GPU_DEVICES=' .env || echo 'LIMIT_GPU_DEVICES=true' >>.env
   grep -q '^BIND_ADDRESS=' .env || echo 'BIND_ADDRESS=0.0.0.0' >>.env
 fi
 
-# binderfs uses a dynamically allocated character-device major. Docker needs
-# the number in scoped mode; privileged mode ignores the restriction but we
-# still record it so switching modes does not require another setup step.
 binder_major="$(awk '$2 == "binder" {print $1; exit}' /proc/devices)"
 if [[ -n "$binder_major" ]]; then
   tmp_env="$(mktemp "$project_dir/.env.XXXXXX")"
@@ -145,8 +140,6 @@ waydroid_requested="${waydroid_requested:-false}"
 privileged_mode="$(awk -F= '$1 == "PRIVILEGED_MODE" {print tolower($2); exit}' .env)"
 privileged_mode="${privileged_mode:-true}"
 
-# Migrate the old two-stage host-loop implementation if this project created
-# it. New installs never create this host service.
 legacy_unit=/etc/systemd/system/fnos-waydroid-desktop.service
 if sudo test -f "$legacy_unit" && sudo grep -q '^# Managed by setup-waydroid.py' "$legacy_unit"; then
   echo "检测到旧版 Waydroid 双模式开机服务，正在迁移到单一运行模式……"
@@ -172,13 +165,9 @@ if sudo test -f "$legacy_unit" && sudo grep -q '^# Managed by setup-waydroid.py'
   done
 fi
 
-# One Docker runtime from the first boot onward. Waydroid downloads and mounts
-# Android images inside Ubuntu; no later Docker recreation is required.
 sudo docker compose --profile web up -d --force-recreate
 
-# Check Ubuntu container outbound connectivity. Do not abort deployment on a
-# temporary network problem; print a clear warning for troubleshooting.
-if sudo docker exec ubuntu26-gnome-hdmi python3 - <<'PY' >/dev/null 2>&1
+if sudo docker exec -i ubuntu26-gnome-hdmi python3 - <<'PY' >/dev/null 2>&1
 import socket
 socket.getaddrinfo('repo.waydro.id', 443)
 s = socket.create_connection(('repo.waydro.id', 443), 8)

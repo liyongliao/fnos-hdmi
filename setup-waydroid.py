@@ -141,6 +141,8 @@ def start():
 
 
 def install():
+    os.chdir(PROJECT)
+
     def quote(value):
         return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
 

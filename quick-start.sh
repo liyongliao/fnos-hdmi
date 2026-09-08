@@ -16,7 +16,7 @@ fi
 
 build_custom=true
 if [[ ! -f .env ]]; then
-  echo ""
+  echo
   echo "请输入 Ubuntu 桌面密码（至少 8 位，可用字母、数字和 ._@%+=:-）："
   while true; do
     read -r -s -p "密码：" desktop_password
@@ -37,9 +37,15 @@ if [[ ! -f .env ]]; then
   read -r -p "安装 GNOME 软件中心？[Y/n] " answer_store
   read -r -p "安装 Google Chrome？[Y/n] " answer_chrome
   read -r -p "安装 Waydroid 安卓运行环境？[y/N] " answer_waydroid
+  echo
+  echo "Docker privileged 高兼容模式会放宽容器硬件/LXC权限，Waydroid 推荐开启。"
+  echo "如果设备有特殊虚拟 GPU/SR-IOV，也可以选择关闭后使用精细权限模式。"
+  read -r -p "开启 privileged 高兼容模式？[Y/n] " answer_privileged
+
   [[ "${answer_store:-Y}" =~ ^[Yy]$ ]] && install_store=true || install_store=false
   [[ "${answer_chrome:-Y}" =~ ^[Yy]$ ]] && install_chrome=true || install_chrome=false
   [[ "${answer_waydroid:-N}" =~ ^[Yy]$ ]] && install_waydroid=true || install_waydroid=false
+  [[ "${answer_privileged:-Y}" =~ ^[Yy]$ ]] && privileged_mode=true || privileged_mode=false
   desktop_image=fnos-ubuntu26-gnome-hdmi:wayland-zh-custom
 
   awk \
@@ -47,12 +53,14 @@ if [[ ! -f .env ]]; then
     -v store="$install_store" \
     -v chrome="$install_chrome" \
     -v waydroid="$install_waydroid" \
+    -v privileged="$privileged_mode" \
     -v image="$desktop_image" '
       /^DESKTOP_PASSWORD=/ {print "DESKTOP_PASSWORD=" password; next}
       /^REMOTE_LOGIN_PASSWORD=/ {print "REMOTE_LOGIN_PASSWORD=" password; next}
       /^INSTALL_APP_STORE=/ {print "INSTALL_APP_STORE=" store; next}
       /^INSTALL_GOOGLE_CHROME=/ {print "INSTALL_GOOGLE_CHROME=" chrome; next}
       /^INSTALL_WAYDROID=/ {print "INSTALL_WAYDROID=" waydroid; next}
+      /^PRIVILEGED_MODE=/ {print "PRIVILEGED_MODE=" privileged; next}
       /^DESKTOP_IMAGE=/ {print "DESKTOP_IMAGE=" image; next}
       {print}
     ' .env.example >.env
@@ -62,17 +70,25 @@ else
   custom_image="${custom_image:-fnos-ubuntu26-gnome-hdmi:wayland-zh-custom}"
   tmp_env="$(mktemp "$project_dir/.env.XXXXXX")"
   awk -v image="$custom_image" '
-    /^DESKTOP_IMAGE=/ {print "DESKTOP_IMAGE=" image; found=1; next}
+    /^DESKTOP_IMAGE=/ {print "DESKTOP_IMAGE=" image; found_image=1; next}
     {print}
-    END {if (!found) print "DESKTOP_IMAGE=" image}
+    END {
+      if (!found_image) print "DESKTOP_IMAGE=" image
+    }
   ' .env >"$tmp_env"
   mv "$tmp_env" .env
   chmod 0600 .env
+
+  # Old .env files predate these options. Add compatibility-first defaults
+  # without overwriting values already selected by the user.
+  grep -q '^PRIVILEGED_MODE=' .env || echo 'PRIVILEGED_MODE=true' >>.env
+  grep -q '^LIMIT_GPU_DEVICES=' .env || echo 'LIMIT_GPU_DEVICES=true' >>.env
+  grep -q '^BIND_ADDRESS=' .env || echo 'BIND_ADDRESS=0.0.0.0' >>.env
 fi
 
-# binderfs uses a dynamically allocated character-device major. Docker must
-# know it before creating the container, otherwise even root gets EPERM when
-# opening binder-control. Detect the number from the fnOS kernel.
+# binderfs uses a dynamically allocated character-device major. Docker needs
+# the number in scoped mode; privileged mode ignores the restriction but we
+# still record it so switching modes does not require another setup step.
 binder_major="$(awk '$2 == "binder" {print $1; exit}' /proc/devices)"
 if [[ -n "$binder_major" ]]; then
   tmp_env="$(mktemp "$project_dir/.env.XXXXXX")"
@@ -112,8 +128,7 @@ if ! sudo docker image inspect "$base_image" >/dev/null 2>&1; then
 fi
 
 if [[ "$build_custom" == true ]]; then
-  sudo docker compose -f compose.yaml -f compose.extras.yaml \
-    build ubuntu26-gnome-hdmi
+  sudo docker compose -f compose.yaml -f compose.extras.yaml build ubuntu26-gnome-hdmi
 fi
 
 for image in guacamole/guacd:1.6.0 guacamole/guacamole:1.6.0; do
@@ -127,10 +142,11 @@ sudo docker compose config --quiet
 
 waydroid_requested="$(awk -F= '$1 == "INSTALL_WAYDROID" {print tolower($2); exit}' .env)"
 waydroid_requested="${waydroid_requested:-false}"
+privileged_mode="$(awk -F= '$1 == "PRIVILEGED_MODE" {print tolower($2); exit}' .env)"
+privileged_mode="${privileged_mode:-true}"
 
 # Migrate the old two-stage host-loop implementation if this project created
-# it. The single-runtime design no longer needs a fnOS systemd service or
-# preallocated /dev/waydroid-system/vendor devices.
+# it. New installs never create this host service.
 legacy_unit=/etc/systemd/system/fnos-waydroid-desktop.service
 if sudo test -f "$legacy_unit" && sudo grep -q '^# Managed by setup-waydroid.py' "$legacy_unit"; then
   echo "检测到旧版 Waydroid 双模式开机服务，正在迁移到单一运行模式……"
@@ -156,10 +172,23 @@ if sudo test -f "$legacy_unit" && sudo grep -q '^# Managed by setup-waydroid.py'
   done
 fi
 
-# One Docker runtime from the first boot onward. If Waydroid is installed, it
-# downloads system.img/vendor.img inside Ubuntu and mounts them there directly;
-# no host SSH command and no later container recreation are required.
+# One Docker runtime from the first boot onward. Waydroid downloads and mounts
+# Android images inside Ubuntu; no later Docker recreation is required.
 sudo docker compose --profile web up -d --force-recreate
+
+# Check Ubuntu container outbound connectivity. Do not abort deployment on a
+# temporary network problem; print a clear warning for troubleshooting.
+if sudo docker exec ubuntu26-gnome-hdmi python3 - <<'PY' >/dev/null 2>&1
+import socket
+socket.getaddrinfo('repo.waydro.id', 443)
+s = socket.create_connection(('repo.waydro.id', 443), 8)
+s.close()
+PY
+then
+  network_status="正常"
+else
+  network_status="异常（请检查 fnOS 默认网关/DNS/Docker bridge）"
+fi
 
 server_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
   {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}
@@ -169,19 +198,19 @@ server_ip="${server_ip:-fnOS-IP}"
 if [[ "$server_ip" != "fnOS-IP" ]]; then
   desktop_user="$(awk -F= '$1 == "DESKTOP_USER" {print $2; exit}' .env)"
   desktop_user="${desktop_user:-ubuntu}"
-  ./create-rdp-file.sh "$server_ip" 3391 \
-    "fnos-remote-login-$server_ip.rdp" "$desktop_user"
+  ./create-rdp-file.sh "$server_ip" 3391 "fnos-remote-login-$server_ip.rdp" "$desktop_user"
 fi
 
 echo
 echo "部署完成："
+echo "  privileged 高兼容模式：$privileged_mode"
+echo "  Ubuntu/Docker 外网：    $network_status"
 echo "  Windows/macOS 同屏桌面：$server_ip:3389"
 echo "  GNOME 独立远程登录：   $server_ip:3391"
 echo "  网页桌面：             http://$server_ip:8080/"
 echo "  NAS 文件：Ubuntu 主文件夹中的 NAS-vol1、NAS-vol2……"
 if [[ "$server_ip" != "fnOS-IP" ]]; then
   echo "  3391 专用连接文件：     $project_dir/fnos-remote-login-$server_ip.rdp"
-  echo "  请下载该 .rdp 文件后双击连接；不要直接新建 3391 设备。"
 fi
 
 if [[ "$waydroid_requested" == "true" ]]; then
@@ -189,6 +218,6 @@ if [[ "$waydroid_requested" == "true" ]]; then
   echo "Waydroid 已安装为单一运行模式："
   echo "  1. 直接进入 Ubuntu 桌面并打开 Waydroid。"
   echo "  2. 首次选择 Vanilla/GAPPS，Android 镜像会保存到 WAYDROID_DATA。"
-  echo "  3. 下载完成后 Waydroid 会在当前容器内直接挂载并启动。"
-  echo "  4. 不再需要执行 setup-waydroid.py，也不会为了 Waydroid 重建 GNOME 容器。"
+  echo "  3. 下载完成后当前容器直接挂载并启动 Android。"
+  echo "  4. 不再需要 setup-waydroid.py，也不会为了 Waydroid 重建 GNOME 容器。"
 fi

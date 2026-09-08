@@ -124,7 +124,20 @@ done
 
 ./prepare-guacamole.sh
 sudo docker compose config --quiet
-if systemctl is-enabled --quiet fnos-waydroid-desktop.service 2>/dev/null; then
+
+waydroid_requested="$(awk -F= '$1 == "INSTALL_WAYDROID" {print tolower($2); exit}' .env)"
+waydroid_requested="${waydroid_requested:-false}"
+
+if [[ "$waydroid_requested" == "true" ]]; then
+  # First boot is intentionally supported before Android images exist.
+  # setup-waydroid.py enables the host service and starts the ordinary Ubuntu
+  # desktop until system.img/vendor.img have been downloaded. Once they exist,
+  # the same command transparently switches to the loop-device overlay.
+  sudo python3 setup-waydroid.py --install-autostart
+  sudo docker compose --profile web up -d --no-deps guacd guacamole
+elif systemctl is-enabled --quiet fnos-waydroid-desktop.service 2>/dev/null; then
+  # Preserve an already configured Waydroid installation even if an older .env
+  # did not contain INSTALL_WAYDROID=true.
   sudo python3 setup-waydroid.py
   sudo docker compose --profile web up -d --no-deps guacd guacamole
 else
@@ -142,6 +155,7 @@ if [[ "$server_ip" != "fnOS-IP" ]]; then
   ./create-rdp-file.sh "$server_ip" 3391 \
     "fnos-remote-login-$server_ip.rdp" "$desktop_user"
 fi
+
 echo
 echo "部署完成："
 echo "  Windows/macOS 同屏桌面：$server_ip:3389"
@@ -151,4 +165,30 @@ echo "  NAS 文件：Ubuntu 主文件夹中的 NAS-vol1、NAS-vol2……"
 if [[ "$server_ip" != "fnOS-IP" ]]; then
   echo "  3391 专用连接文件：     $project_dir/fnos-remote-login-$server_ip.rdp"
   echo "  请下载该 .rdp 文件后双击连接；不要直接新建 3391 设备。"
+fi
+
+if [[ "$waydroid_requested" == "true" ]]; then
+  waydroid_data_value="$(awk -F= '$1 == "WAYDROID_DATA" {print $2; exit}' .env)"
+  waydroid_data_value="${waydroid_data_value:-./waydroid-data}"
+  if [[ "$waydroid_data_value" = /* ]]; then
+    waydroid_data_dir="$waydroid_data_value"
+  else
+    waydroid_data_dir="$project_dir/${waydroid_data_value#./}"
+  fi
+
+  if [[ ! -s "$waydroid_data_dir/waydroid.cfg" \
+        || ! -s "$waydroid_data_dir/images/system.img" \
+        || ! -s "$waydroid_data_dir/images/vendor.img" ]]; then
+    echo
+    echo "Waydroid 首次初始化尚未完成，但 Ubuntu 桌面已经可以正常使用。"
+    echo "  1. 先通过 HDMI、$server_ip:3389 或 http://$server_ip:8080/ 进入 Ubuntu。"
+    echo "  2. 在 Ubuntu 应用菜单启动 Waydroid，选择 Vanilla/GAPPS 并等待 Android 镜像下载完成。"
+    echo "  3. 返回 fnOS SSH 执行："
+    echo "     cd $project_dir"
+    echo "     sudo python3 setup-waydroid.py --install-autostart"
+    echo "  4. 脚本检测到 system.img/vendor.img 后会自动切换到完整 Waydroid 模式。"
+  else
+    echo
+    echo "Waydroid Android 镜像已存在，当前已按完整 Waydroid 模式启动。"
+  fi
 fi

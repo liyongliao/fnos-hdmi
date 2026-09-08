@@ -5,36 +5,41 @@ services:
     container_name: ubuntu26-gnome-hdmi
     hostname: ubuntu26-hdmi
     cap_add:
-      # Waydroid creates a waydroid0 bridge inside this container's private
-      # network namespace. This does not grant access to the fnOS host network.
+      # GNOME/systemd plus nested Waydroid/LXC runtime capabilities. This is
+      # still deliberately narrower than privileged:true and does not expose
+      # unrelated fnOS block/GPU devices.
       - NET_ADMIN
       - SYS_ADMIN
       - SYS_TTY_CONFIG
       - SYS_NICE
+      - IPC_LOCK
+      - SYS_RESOURCE
+      - SYS_PTRACE
+      - DAC_READ_SEARCH
+      - BLOCK_SUSPEND
+      - MKNOD
     security_opt:
       # fnOS AppArmor otherwise blocks remounting the container's private
       # cgroup namespace read-write before systemd starts.
       - apparmor=unconfined
       # GNOME 50 delegates image decoding to glycin. Its bubblewrap sandbox
-      # needs pivot_root/mount syscalls blocked by Docker's default profile;
-      # without this, the desktop background and SVG application icons vanish.
+      # and nested LXC need syscalls blocked by Docker's default profile.
       - seccomp=unconfined
     # Keep systemd's cgroups inside the container namespace. Never give the
     # container a writable view of the host's complete cgroup tree.
     cgroup: private
     sysctls:
+      # Waydroid's bridge runs only in this private Docker network namespace.
       net.ipv4.ip_forward: "1"
     tty: true
     stdin_open: true
     stop_signal: SIGRTMIN+3
-    # GNOME + systemd + Waydroid can need more than 20 seconds to stop cleanly.
     stop_grace_period: 45s
     restart: unless-stopped
 
     # Desktop-computer mode: do not hard-cap RAM, swap or PID count here.
-    # GNOME + browser + RDP + Waydroid/GAPPS can burst past the old 4/6 GiB
-    # and 2048/8192 PID ceilings. If a host safety ceiling is required, layer
-    # compose.resource-limits.yaml on top instead.
+    # GNOME + browser + RDP + Waydroid/GAPPS can burst significantly. Optional
+    # host safety ceilings belong in compose.resource-limits.yaml.
 
     environment:
       container: docker
@@ -55,18 +60,18 @@ services:
       DISABLE_UDISKS: ${DISABLE_UDISKS:-true}
       NAS_STORAGE_ROOT: /mnt/fnos
     ports:
-      # The common RDP ports always mirror the active HDMI Wayland desktop.
       - "${RDP_PORT:-3389}:3390"
       - "${DESKTOP_SHARING_PORT:-3390}:3390"
-      # GNOME system Remote Login remains available separately. Some Microsoft
-      # clients fail its GDM handover, so it is not the default endpoint.
       - "${REMOTE_LOGIN_PORT:-3391}:3389"
     volumes:
       - ${DESKTOP_HOME:-/vol1/1000/docker/ubuntu}:/home/${DESKTOP_USER:-ubuntu}
-      # Keep downloaded Android images and app data across image rebuilds.
+      # Waydroid downloads and manages its own Android images here. The desktop
+      # container never has to be recreated when these files appear/update.
       - ${WAYDROID_DATA:-./waydroid-data}:/var/lib/waydroid
       - ./container-entrypoint.sh:/usr/local/sbin/container-entrypoint:ro
       - ./configure-waydroid.py:/usr/local/sbin/configure-waydroid.py:ro
+      - ./prepare-waydroid-android.py:/usr/local/sbin/prepare-waydroid-android.py:ro
+      - ./prepare-waydroid-runtime.sh:/usr/local/sbin/prepare-waydroid-runtime:ro
       - ./enable-desktop-sharing.sh:/usr/local/sbin/enable-desktop-sharing:ro
       - ./enable-remote-login.sh:/usr/local/sbin/enable-remote-login:ro
       - ./fnos-desktop-sharing.service:/etc/systemd/system/fnos-desktop-sharing.service:ro
@@ -87,12 +92,23 @@ services:
       # binderfs creates binder, hwbinder and vndbinder dynamically. fnOS 6.18
       # currently assigns major 243; quick-start.sh detects the actual number.
       - "c ${BINDER_DEVICE_MAJOR:-243}:* rmw"
+      # Single-runtime Waydroid support. util-linux mount allocates loop devices
+      # for system.img/vendor.img inside this container. Major 7 is loop only;
+      # physical fnOS disks (dm/nvme/sd) remain blocked. loop-control is the
+      # standard misc char device 10:237 and is created in the private /dev.
+      - "c 10:237 rmw"
+      - "b 7:* rmw"
+    ulimits:
+      memlock:
+        soft: 1073741824
+        hard: 1073741824
+      nofile:
+        soft: 1048576
+        hard: 1048576
     tmpfs:
       - /run:rw,nosuid,nodev,mode=755,size=512m
       - /run/lock:rw,nosuid,nodev,noexec,mode=755,size=32m
       - /tmp:rw,nosuid,nodev,mode=1777,size=2g
-    # Chromium/Chrome, GNOME Shell, Wayland and Android benefit from a larger
-    # shared-memory area. This is a maximum size, not preallocated RAM.
     shm_size: 2gb
 
   guacd:
@@ -102,7 +118,6 @@ services:
     profiles: ["web"]
     restart: unless-stopped
     mem_limit: ${GUACD_MEMORY_LIMIT:-512m}
-    # Leave memswap_limit unset so host swap can provide headroom when present.
     pids_limit: 512
     security_opt:
       - no-new-privileges:true
@@ -114,7 +129,6 @@ services:
     profiles: ["web"]
     restart: unless-stopped
     mem_limit: ${WEB_MEMORY_LIMIT:-1g}
-    # Leave memswap_limit unset so host swap can provide headroom when present.
     pids_limit: 1024
     depends_on:
       - guacd

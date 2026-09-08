@@ -61,8 +61,8 @@ def install():
         'Requires=docker.service\nAfter=docker.service local-fs.target\n'
         f'RequiresMountsFor={quote(PROJECT)}\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\n'
         f'ExecStart=/usr/bin/python3 {quote(PROJECT / "setup-waydroid.py")}\n'
-        'ExecStop=/usr/bin/docker stop --time 20 ubuntu26-gnome-hdmi\n'
-        'TimeoutStartSec=120\nTimeoutStopSec=40\n\n[Install]\nWantedBy=multi-user.target\n')
+        'ExecStop=/usr/bin/docker stop --time 45 ubuntu26-gnome-hdmi\n'
+        'TimeoutStartSec=180\nTimeoutStopSec=60\n\n[Install]\nWantedBy=multi-user.target\n')
     run('systemctl', 'daemon-reload')
     run('systemctl', 'enable', SERVICE)
     # Starting an inactive unit prepares devices immediately. For a running

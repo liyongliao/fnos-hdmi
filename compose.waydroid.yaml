@@ -5,10 +5,11 @@ services:
     # Do not auto-start with stale loop device numbers after a host reboot.
     # The host service prepares the mappings, then starts this container.
     restart: "no"
-    # GNOME plus GAPPS exceeds the base desktop's 2048-thread budget.
-    pids_limit: ${WAYDROID_PIDS_LIMIT:-8192}
-    mem_limit: ${WAYDROID_MEMORY_LIMIT:-6g}
-    memswap_limit: ${WAYDROID_MEMORY_LIMIT:-6g}
+
+    # Do not impose a separate RAM/PID ceiling for Waydroid. GNOME + GAPPS can
+    # legitimately exceed the previous 6 GiB / 8192 PID limits. Optional host
+    # safety ceilings belong in compose.resource-limits.yaml.
+
     volumes:
       - ./prepare-waydroid-android.py:/usr/local/sbin/prepare-waydroid-android.py:ro
     cap_add:
@@ -21,6 +22,9 @@ services:
       memlock:
         soft: 1073741824
         hard: 1073741824
+      nofile:
+        soft: 1048576
+        hard: 1048576
     devices:
       - ${WAYDROID_SYSTEM_LOOP:?prepare Android system loop}:/dev/waydroid-system:r
       - ${WAYDROID_VENDOR_LOOP:?prepare Android vendor loop}:/dev/waydroid-vendor:r

@@ -19,7 +19,7 @@ services:
       # needs pivot_root/mount syscalls blocked by Docker's default profile;
       # without this, the desktop background and SVG application icons vanish.
       - seccomp=unconfined
-    # Keep systemd's cgroups inside the container namespace.  Never give the
+    # Keep systemd's cgroups inside the container namespace. Never give the
     # container a writable view of the host's complete cgroup tree.
     cgroup: private
     sysctls:
@@ -27,11 +27,15 @@ services:
     tty: true
     stdin_open: true
     stop_signal: SIGRTMIN+3
-    stop_grace_period: 20s
+    # GNOME + systemd + Waydroid can need more than 20 seconds to stop cleanly.
+    stop_grace_period: 45s
     restart: unless-stopped
-    mem_limit: ${MEMORY_LIMIT:-4g}
-    memswap_limit: ${MEMORY_LIMIT:-4g}
-    pids_limit: ${PIDS_LIMIT:-2048}
+
+    # Desktop-computer mode: do not hard-cap RAM, swap or PID count here.
+    # GNOME + browser + RDP + Waydroid/GAPPS can burst past the old 4/6 GiB
+    # and 2048/8192 PID ceilings. If a host safety ceiling is required, layer
+    # compose.resource-limits.yaml on top instead.
+
     environment:
       container: docker
       TZ: Asia/Shanghai
@@ -72,7 +76,7 @@ services:
       - /dev/snd:/dev/snd
       - /run/udev:/run/udev:ro
     devices:
-      # Expose only the physical display PF.  card1-card4 are SR-IOV VFs and
+      # Expose only the physical display PF. card1-card4 are SR-IOV VFs and
       # must not be enumerated by Mutter/GDM.
       - /dev/dri/card0:/dev/dri/card0
       - /dev/dri/renderD128:/dev/dri/renderD128
@@ -84,10 +88,12 @@ services:
       # currently assigns major 243; quick-start.sh detects the actual number.
       - "c ${BINDER_DEVICE_MAJOR:-243}:* rmw"
     tmpfs:
-      - /run:rw,nosuid,nodev,mode=755,size=256m
-      - /run/lock:rw,nosuid,nodev,noexec,mode=755,size=16m
-      - /tmp:rw,nosuid,nodev,mode=1777,size=1g
-    shm_size: 1gb
+      - /run:rw,nosuid,nodev,mode=755,size=512m
+      - /run/lock:rw,nosuid,nodev,noexec,mode=755,size=32m
+      - /tmp:rw,nosuid,nodev,mode=1777,size=2g
+    # Chromium/Chrome, GNOME Shell, Wayland and Android benefit from a larger
+    # shared-memory area. This is a maximum size, not preallocated RAM.
+    shm_size: 2gb
 
   guacd:
     image: guacamole/guacd:1.6.0
@@ -95,9 +101,9 @@ services:
     container_name: ubuntu26-guacd
     profiles: ["web"]
     restart: unless-stopped
-    mem_limit: ${GUACD_MEMORY_LIMIT:-256m}
-    memswap_limit: ${GUACD_MEMORY_LIMIT:-256m}
-    pids_limit: 256
+    mem_limit: ${GUACD_MEMORY_LIMIT:-512m}
+    # Leave memswap_limit unset so host swap can provide headroom when present.
+    pids_limit: 512
     security_opt:
       - no-new-privileges:true
 
@@ -107,9 +113,9 @@ services:
     container_name: ubuntu26-guacamole
     profiles: ["web"]
     restart: unless-stopped
-    mem_limit: ${WEB_MEMORY_LIMIT:-768m}
-    memswap_limit: ${WEB_MEMORY_LIMIT:-768m}
-    pids_limit: 512
+    mem_limit: ${WEB_MEMORY_LIMIT:-1g}
+    # Leave memswap_limit unset so host swap can provide headroom when present.
+    pids_limit: 1024
     depends_on:
       - guacd
       - ubuntu26-gnome-hdmi
@@ -118,7 +124,7 @@ services:
       GUACD_PORT: 4822
       GUACAMOLE_HOME: /etc/guacamole/custom
       WEBAPP_CONTEXT: ROOT
-      JAVA_OPTS: -Xms64m -Xmx384m
+      JAVA_OPTS: -Xms64m -Xmx512m
     ports:
       - "${WEB_PORT:-8080}:8080"
     volumes:

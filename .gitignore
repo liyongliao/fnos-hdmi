@@ -7,3 +7,4 @@ hdmi-*-live.pid
 *.tar
 *.tar.gz
 fnos-remote-login*.rdp
+waydroid-data/

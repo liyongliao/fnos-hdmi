@@ -43,11 +43,12 @@ chmod +x quick-start.sh
 
 不要使用 `sudo ./quick-start.sh`。脚本会在需要操作 Docker 时自行调用 sudo。
 
-安装向导只会询问三件事：
+安装向导只会询问四件事：
 
 1. Ubuntu 桌面密码
 2. 是否安装软件中心
 3. 是否安装 Google Chrome
+4. 是否安装 Waydroid 安卓运行环境（默认不安装）
 
 随后会自动完成硬件检查、创建 `.env`、映射 NAS 存储、准备网页端并启动容器。
 第一次联网构建需要下载 Ubuntu 软件包，时间取决于网络速度。安装结束还会在项目
@@ -202,6 +203,75 @@ DESKTOP_IMAGE=fnos-ubuntu26-gnome-hdmi:wayland-zh-custom
 sudo docker compose -f compose.yaml -f compose.extras.yaml \
   build ubuntu26-gnome-hdmi
 sudo docker compose --profile web up -d --force-recreate
+```
+
+## 可选：Waydroid 安卓运行环境
+
+默认桌面配置只安装 Waydroid。**首次下载 Android 镜像后，还需要在飞牛 SSH
+执行下面的启用命令**，不能只在 Ubuntu 内反复点击启动。
+不要开启 `privileged` 或映射整个 `/dev`。
+
+Waydroid 本身也是一个基于 LXC 的容器。把它安装到本项目，相当于在 Docker 桌面
+容器内再运行一层 Android 容器。项目不会重新启用 `privileged: true`，启用时会增加：
+
+- fnOS Binder 字符设备对应的精确 cgroup 规则；
+- 容器私有网络命名空间内创建 `waydroid0` 网桥所需的 `NET_ADMIN`；
+- `/var/lib/waydroid` 持久化目录，避免重建桌面后重新下载 Android 镜像。
+- 仅关联 Android 镜像的两个只读 loop 设备，以及嵌套 Android 所需的资源权限；
+- 飞牛开机服务，重新检测设备编号并启动桌面容器，避免沿用失效的 loop 编号。
+
+新安装时，在 `./quick-start.sh` 询问“安装 Waydroid”时输入 `y`，随后完成下方初始化步骤。
+
+已有配置请编辑 `.env`：
+
+```ini
+INSTALL_WAYDROID=true
+WAYDROID_DISTRO=resolute
+WAYDROID_DATA=./waydroid-data
+```
+
+然后构建派生镜像并重建桌面容器：
+
+```bash
+./quick-start.sh
+```
+
+`quick-start.sh` 会从 `/proc/devices` 自动检测本机 Binder 主设备号，并写入
+`BINDER_DEVICE_MAJOR`。不要照抄其他机器的数字，也不要用 `c *:* rmw` 放开全部
+字符设备。
+
+进入 Ubuntu 后从应用菜单启动 Waydroid，按需选择 Vanilla 或 GAPPS 并等待下载完成。
+返回**飞牛 SSH**，在本项目目录执行（会短暂断开桌面连接）：
+
+```bash
+sudo python3 setup-waydroid.py --install-autostart
+```
+
+完成后重新连接 Ubuntu，从应用菜单打开 Waydroid。后续更新项目或 Android 镜像后，
+重新执行这条命令。不要用普通 `docker compose up` 重建桌面，否则会遗漏 Waydroid
+的附加设备配置；`quick-start.sh` 会识别已启用的开机服务并保留附加配置。
+若移动项目目录，应先停用旧路径的 `fnos-waydroid-desktop.service`，不要直接删除数据。
+
+启用后的默认上限为 6GB 内存、8192 个进程/线程（不是预先占满）。需要调整时，
+在 `.env` 设置 `WAYDROID_MEMORY_LIMIT` 和 `WAYDROID_PIDS_LIMIT` 后重新运行启用命令。
+开机服务负责准备设备和启动 Ubuntu；Android 在你打开 Waydroid 时启动。
+
+排查 Binder 权限时，在 **Ubuntu 桌面终端**执行：
+
+```bash
+sudo python3 - <<'PY'
+import os
+fd = os.open('/dev/binderfs/binder-control', os.O_RDONLY)
+os.close(fd)
+print('Binder 权限正常')
+PY
+```
+
+如果仍出现 `Operation not permitted`，确认容器是修改 compose 后重新创建的，而不只是
+执行了 `docker compose restart`：
+
+```bash
+sudo python3 setup-waydroid.py --install-autostart
 ```
 
 软件中心使用 GNOME Software 的 Deb/PackageKit 后端，不依赖容器中较难维护的 Snap。

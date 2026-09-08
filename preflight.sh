@@ -54,4 +54,19 @@ else
   failed=1
 fi
 
+echo
+echo "Waydroid Binder support:"
+binder_major="$(awk '$2 == "binder" {print $1; exit}' /proc/devices)"
+if [ -n "$binder_major" ]; then
+  echo "OK      binderfs is available (character major $binder_major)"
+  if grep -q 'BINDER_DEVICE_MAJOR' compose.yaml; then
+    echo "OK      Compose has a scoped Binder device rule"
+  else
+    echo "MISSING Compose Binder device rule"
+    failed=1
+  fi
+else
+  echo "MISSING fnOS kernel binderfs support; Waydroid cannot run"
+fi
+
 exit "$failed"

@@ -1,6 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
+if [[ -f /usr/local/sbin/configure-waydroid.py ]]; then
+  python3 /usr/local/sbin/configure-waydroid.py
+fi
+
+if [[ -b /dev/waydroid-system ]]; then
+  # Only the Docker-private network sysctls; never remount all /proc/sys.
+  mount --bind /proc/sys/net /proc/sys/net
+  mount -o remount,bind,rw /proc/sys/net
+  install -d /run/fnos-waydroid-base
+  mount -o ro /dev/waydroid-system /run/fnos-waydroid-base
+  python3 /usr/local/sbin/prepare-waydroid-android.py /run/fnos-waydroid-base
+  umount /run/fnos-waydroid-base
+fi
+
 # Docker mounts a private cgroup v2 namespace read-only for non-privileged
 # containers on fnOS.  systemd needs to create init.scope below that private
 # root; remount only this namespaced view instead of bind-mounting the host's
@@ -27,6 +41,18 @@ fi
 # Select exactly one GNOME RDP role.  Remote Login must own the system daemon
 # and must not race the per-user Desktop Sharing service.
 remote_mode="${REMOTE_MODE:-both}"
+for remote_unit in fnos-desktop-sharing.service fnos-remote-login.service; do
+  if [[ ! -f "/etc/systemd/system/$remote_unit" ]]; then
+    echo "Missing $remote_unit: update compose.yaml and recreate the container." >&2
+    exit 15
+  fi
+done
+install -d /etc/systemd/system/graphical.target.wants
+for remote_unit in fnos-desktop-sharing.service fnos-remote-login.service; do
+  ln -sfn "/etc/systemd/system/$remote_unit" "/etc/systemd/system/graphical.target.wants/$remote_unit"
+done
+ln -sfn /usr/lib/systemd/system/gnome-remote-desktop.service \
+  /etc/systemd/system/graphical.target.wants/gnome-remote-desktop.service
 desktop_user="${DESKTOP_USER:-ubuntu}"
 desktop_uid="${DESKTOP_UID:-1000}"
 desktop_gid="${DESKTOP_GID:-1000}"

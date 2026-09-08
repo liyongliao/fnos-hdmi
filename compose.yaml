@@ -5,6 +5,9 @@ services:
     container_name: ubuntu26-gnome-hdmi
     hostname: ubuntu26-hdmi
     cap_add:
+      # Waydroid creates a waydroid0 bridge inside this container's private
+      # network namespace. This does not grant access to the fnOS host network.
+      - NET_ADMIN
       - SYS_ADMIN
       - SYS_TTY_CONFIG
       - SYS_NICE
@@ -19,6 +22,8 @@ services:
     # Keep systemd's cgroups inside the container namespace.  Never give the
     # container a writable view of the host's complete cgroup tree.
     cgroup: private
+    sysctls:
+      net.ipv4.ip_forward: "1"
     tty: true
     stdin_open: true
     stop_signal: SIGRTMIN+3
@@ -54,9 +59,14 @@ services:
       - "${REMOTE_LOGIN_PORT:-3391}:3389"
     volumes:
       - ${DESKTOP_HOME:-/vol1/1000/docker/ubuntu}:/home/${DESKTOP_USER:-ubuntu}
+      # Keep downloaded Android images and app data across image rebuilds.
+      - ${WAYDROID_DATA:-./waydroid-data}:/var/lib/waydroid
       - ./container-entrypoint.sh:/usr/local/sbin/container-entrypoint:ro
+      - ./configure-waydroid.py:/usr/local/sbin/configure-waydroid.py:ro
       - ./enable-desktop-sharing.sh:/usr/local/sbin/enable-desktop-sharing:ro
       - ./enable-remote-login.sh:/usr/local/sbin/enable-remote-login:ro
+      - ./fnos-desktop-sharing.service:/etc/systemd/system/fnos-desktop-sharing.service:ro
+      - ./fnos-remote-login.service:/etc/systemd/system/fnos-remote-login.service:ro
       - ./99-fnos-login-screen.gschema.override:/usr/share/glib-2.0/schemas/99-fnos-login-screen.gschema.override:ro
       - /dev/input:/dev/input
       - /dev/snd:/dev/snd
@@ -70,6 +80,9 @@ services:
     device_cgroup_rules:
       - "c 13:* rmw"
       - "c 116:* rmw"
+      # binderfs creates binder, hwbinder and vndbinder dynamically. fnOS 6.18
+      # currently assigns major 243; quick-start.sh detects the actual number.
+      - "c ${BINDER_DEVICE_MAJOR:-243}:* rmw"
     tmpfs:
       - /run:rw,nosuid,nodev,mode=755,size=256m
       - /run/lock:rw,nosuid,nodev,noexec,mode=755,size=16m

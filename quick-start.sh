@@ -36,19 +36,23 @@ if [[ ! -f .env ]]; then
 
   read -r -p "安装 GNOME 软件中心？[Y/n] " answer_store
   read -r -p "安装 Google Chrome？[Y/n] " answer_chrome
+  read -r -p "安装 Waydroid 安卓运行环境？[y/N] " answer_waydroid
   [[ "${answer_store:-Y}" =~ ^[Yy]$ ]] && install_store=true || install_store=false
   [[ "${answer_chrome:-Y}" =~ ^[Yy]$ ]] && install_chrome=true || install_chrome=false
+  [[ "${answer_waydroid:-N}" =~ ^[Yy]$ ]] && install_waydroid=true || install_waydroid=false
   desktop_image=fnos-ubuntu26-gnome-hdmi:wayland-zh-custom
 
   awk \
     -v password="$desktop_password" \
     -v store="$install_store" \
     -v chrome="$install_chrome" \
+    -v waydroid="$install_waydroid" \
     -v image="$desktop_image" '
       /^DESKTOP_PASSWORD=/ {print "DESKTOP_PASSWORD=" password; next}
       /^REMOTE_LOGIN_PASSWORD=/ {print "REMOTE_LOGIN_PASSWORD=" password; next}
       /^INSTALL_APP_STORE=/ {print "INSTALL_APP_STORE=" store; next}
       /^INSTALL_GOOGLE_CHROME=/ {print "INSTALL_GOOGLE_CHROME=" chrome; next}
+      /^INSTALL_WAYDROID=/ {print "INSTALL_WAYDROID=" waydroid; next}
       /^DESKTOP_IMAGE=/ {print "DESKTOP_IMAGE=" image; next}
       {print}
     ' .env.example >.env
@@ -64,6 +68,23 @@ else
   ' .env >"$tmp_env"
   mv "$tmp_env" .env
   chmod 0600 .env
+fi
+
+# binderfs uses a dynamically allocated character-device major. Docker must
+# know it before creating the container, otherwise even root gets EPERM when
+# opening binder-control. Detect the number from the fnOS kernel.
+binder_major="$(awk '$2 == "binder" {print $1; exit}' /proc/devices)"
+if [[ -n "$binder_major" ]]; then
+  tmp_env="$(mktemp "$project_dir/.env.XXXXXX")"
+  awk -v major="$binder_major" '
+    /^BINDER_DEVICE_MAJOR=/ {print "BINDER_DEVICE_MAJOR=" major; found=1; next}
+    {print}
+    END {if (!found) print "BINDER_DEVICE_MAJOR=" major}
+  ' .env >"$tmp_env"
+  mv "$tmp_env" .env
+  chmod 0600 .env
+else
+  echo "警告：fnOS 内核没有注册 binder 驱动，Waydroid 将无法运行。" >&2
 fi
 
 chmod +x preflight.sh prepare-guacamole.sh setup-storage.sh create-rdp-file.sh
@@ -103,7 +124,12 @@ done
 
 ./prepare-guacamole.sh
 sudo docker compose config --quiet
-sudo docker compose --profile web up -d
+if systemctl is-enabled --quiet fnos-waydroid-desktop.service 2>/dev/null; then
+  sudo python3 setup-waydroid.py
+  sudo docker compose --profile web up -d --no-deps guacd guacamole
+else
+  sudo docker compose --profile web up -d
+fi
 
 server_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
   {for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}

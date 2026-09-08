@@ -4,15 +4,22 @@ FROM ${BASE_DESKTOP_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
 ARG INSTALL_APP_STORE=true
 ARG INSTALL_GOOGLE_CHROME=true
+ARG INSTALL_WAYDROID=false
 ARG CHROME_DEB_URL=https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+ARG WAYDROID_DISTRO=resolute
 
 USER root
+
+# Refresh startup services even when the user has an older cached base image.
+COPY fnos-desktop-sharing.service fnos-remote-login.service /etc/systemd/system/
+RUN systemctl enable fnos-desktop-sharing.service fnos-remote-login.service gnome-remote-desktop.service
 
 # The derived image always adds bindfs for safe fnOS storage access. Optional
 # desktop applications are layered here too, so the offline base stays intact.
 RUN set -eux; \
     case "$INSTALL_APP_STORE" in true|false) ;; *) exit 2 ;; esac; \
     case "$INSTALL_GOOGLE_CHROME" in true|false) ;; *) exit 2 ;; esac; \
+    case "$INSTALL_WAYDROID" in true|false) ;; *) exit 2 ;; esac; \
     apt-get update; \
     apt-get install -y --no-install-recommends bindfs; \
     if [ "$INSTALL_APP_STORE" = true ]; then \
@@ -24,6 +31,16 @@ RUN set -eux; \
       curl --fail --location --retry 3 --output /tmp/google-chrome.deb "$CHROME_DEB_URL"; \
       apt-get install -y --no-install-recommends /tmp/google-chrome.deb; \
       rm -f /tmp/google-chrome.deb; \
+    fi; \
+    if [ "$INSTALL_WAYDROID" = true ]; then \
+      apt-get install -y --no-install-recommends ca-certificates curl; \
+      curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+        --output /usr/share/keyrings/waydroid.gpg \
+        https://repo.waydro.id/waydroid.gpg; \
+      printf 'deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ %s main\n' \
+        "$WAYDROID_DISTRO" >/etc/apt/sources.list.d/waydroid.list; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends waydroid; \
     fi; \
     printf 'user_allow_other\n' >/etc/fuse.conf; \
     rm -rf /var/lib/apt/lists/*

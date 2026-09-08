@@ -32,7 +32,7 @@ if path.exists():
             '    # fnOS single-runtime image preparation\n'
             '    fnos_prepare = "/usr/local/sbin/prepare-waydroid-runtime"\n'
             '    if os.path.exists(fnos_prepare):\n'
-            '        tools.helpers.run.user(args, [fnos_prepare])\n\n'
+            '        tools.helpers.run.user(args, ["/bin/bash", fnos_prepare])\n\n'
             + needle
         )
         if needle not in original:

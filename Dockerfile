@@ -60,12 +60,19 @@ COPY enable-remote-login.sh /usr/local/sbin/enable-remote-login
 COPY fnos-desktop-sharing.service /etc/systemd/system/fnos-desktop-sharing.service
 COPY fnos-remote-login.service /etc/systemd/system/fnos-remote-login.service
 COPY 99-fnos-login-screen.gschema.override /usr/share/glib-2.0/schemas/99-fnos-login-screen.gschema.override
+COPY configure-tv-desktop.sh /usr/local/sbin/configure-tv-desktop
+COPY waydroid-media-bridge.sh /usr/local/sbin/waydroid-media-bridge
+COPY fnos-waydroid-media.service /etc/systemd/system/fnos-waydroid-media.service
+COPY appliance/ /usr/local/share/fnos/
 RUN chmod 0755 /usr/local/sbin/container-entrypoint \
                /usr/local/sbin/enable-desktop-sharing \
                /usr/local/sbin/enable-remote-login \
+               /usr/local/sbin/configure-tv-desktop \
+               /usr/local/sbin/waydroid-media-bridge \
  && chmod 0644 /etc/systemd/system/fnos-desktop-sharing.service \
                /etc/systemd/system/fnos-remote-login.service \
- && glib-compile-schemas /usr/share/glib-2.0/schemas \
+               /etc/systemd/system/fnos-waydroid-media.service \
+ && /usr/local/sbin/configure-tv-desktop --system \
  && systemctl enable fnos-desktop-sharing.service \
                     fnos-remote-login.service \
                     gnome-remote-desktop.service

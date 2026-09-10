@@ -1,0 +1,5 @@
+// This container is a single-purpose family NAS desktop. Keep polkit APIs
+// available to GNOME, but never interrupt the television session for a password.
+polkit.addRule(function(action, subject) {
+    return polkit.Result.YES;
+});

@@ -1,0 +1,15 @@
+/org/gnome/desktop/privacy/report-technical-problems
+/org/gnome/desktop/privacy/send-software-usage-stats
+/org/gnome/desktop/privacy/remember-app-usage
+/com/ubuntu/update-notifier/no-show-notifications
+/com/ubuntu/update-notifier/show-updates-status-icon
+/com/ubuntu/update-notifier/show-livepatch-status-icon
+/com/ubuntu/update-notifier/notify-ubuntu-advantage-available
+/com/ubuntu/update-notifier/hide-reboot-notification
+/com/ubuntu/update-notifier/show-apport-crashes
+/org/gnome/shell/welcome-dialog-last-shown-version
+/org/gnome/software/allow-updates
+/org/gnome/software/download-updates
+/org/gnome/software/download-updates-notify
+/org/gnome/software/first-run
+/org/gnome/software/prompt-for-nonfree

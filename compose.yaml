@@ -53,6 +53,12 @@ services:
       DESKTOP_SHARING_PORT: 3390
       DISABLE_UDISKS: ${DISABLE_UDISKS:-true}
       NAS_STORAGE_ROOT: /mnt/fnos
+      # Optional NAS folder exposed inside Android app storage. Empty disables
+      # the bridge; read-only is the safe default for a photo library.
+      WAYDROID_MEDIA_SOURCE: ${WAYDROID_MEDIA_SOURCE:-}
+      WAYDROID_MEDIA_TARGET: ${WAYDROID_MEDIA_TARGET:-Pictures/nas}
+      WAYDROID_MEDIA_MODE: ${WAYDROID_MEDIA_MODE:-ro}
+      WAYDROID_MEDIA_SCAN_INTERVAL: ${WAYDROID_MEDIA_SCAN_INTERVAL:-1800}
       # In privileged mode Docker exposes every DRM node. Keep only the known
       # physical display PF in the container /dev so Mutter does not enumerate
       # fnOS SR-IOV VFs. Set false if another GPU is intentionally required.
@@ -72,8 +78,11 @@ services:
       - ./configure-waydroid.py:/usr/local/sbin/configure-waydroid.py:ro
       - ./prepare-waydroid-android.py:/usr/local/sbin/prepare-waydroid-android.py:ro
       - ./prepare-waydroid-runtime.sh:/usr/local/sbin/prepare-waydroid-runtime:ro
+      - ./waydroid-media-bridge.sh:/usr/local/sbin/waydroid-media-bridge:ro
+      - ./fnos-waydroid-media.service:/etc/systemd/system/fnos-waydroid-media.service:ro
       - ./enable-desktop-sharing.sh:/usr/local/sbin/enable-desktop-sharing:ro
       - ./enable-remote-login.sh:/usr/local/sbin/enable-remote-login:ro
+      - ./configure-tv-desktop.sh:/usr/local/sbin/configure-tv-desktop:ro
       - ./fnos-desktop-sharing.service:/etc/systemd/system/fnos-desktop-sharing.service:ro
       - ./fnos-remote-login.service:/etc/systemd/system/fnos-remote-login.service:ro
       - ./99-fnos-login-screen.gschema.override:/usr/share/glib-2.0/schemas/99-fnos-login-screen.gschema.override:ro

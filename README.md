@@ -15,6 +15,29 @@
 
 Docker 与 fnOS 共用宿主机 Linux 内核，不是完整虚拟机。
 
+## 家庭电视桌面模式
+
+本镜像按家庭 NAS/电视桌面设计，默认进行以下处理：
+
+- Polkit 服务继续运行，但容器内所有 Polkit 请求直接允许，不再弹出认证密码框；
+- 禁用 APT 定时更新、更新通知、Ubuntu Advantage/版本升级提示；
+- 跳过 GNOME 首次欢迎页；
+- 禁止 GNOME Online Accounts、Identity 和 GOA 文件卷服务在桌面会话中自动启动；
+- 关闭 Ubuntu 技术问题上报、软件使用统计和应用使用记录。
+
+这些设置只发生在 Ubuntu 容器内，不会关闭 fnOS 宿主机的 Polkit 或更新服务。
+但桌面容器对 NAS 目录拥有写权限，任何能进入该 Ubuntu 桌面的人都可以无密码执行
+Polkit 管理操作；不要把 RDP/Web 端口直接暴露到公网。
+
+APT 自动更新被关闭后，系统不会自动获得安全修复。需要维护时手动执行：
+
+```bash
+sudo apt update
+sudo apt full-upgrade
+```
+
+更新完成后重新启动桌面容器。
+
 ## 推荐使用方式
 
 ### 一键安装
@@ -293,6 +316,47 @@ NAS_STORAGE_MODE=ro
 ```ini
 NAS_STORAGE_MODE=rw
 ```
+
+### 让 Waydroid APP 读取 NAS 照片
+
+不要只手工把 NAS 目录 `mount --bind` 到
+`~/.local/share/waydroid/data/media/0`。Android 11 及更新版本的应用通过
+`/storage/emulated/0` 存储隔离层访问文件，所以宿主机中看起来挂载成功，
+Android APP 内仍可能是空目录。
+
+在 `.env` 中配置一个需要共享的 NAS 目录：
+
+```ini
+WAYDROID_MEDIA_SOURCE=/mnt/fnos/vol2/Photos
+WAYDROID_MEDIA_TARGET=Pictures/nas
+WAYDROID_MEDIA_MODE=ro
+WAYDROID_MEDIA_SCAN_INTERVAL=1800
+```
+
+然后重建主桌面容器（不会删除 Ubuntu 主目录和 Waydroid 数据）：
+
+```bash
+sudo docker compose --profile web up -d --force-recreate
+```
+
+随后在 Android APP 中打开：
+
+```text
+内部存储 / Pictures / nas
+```
+
+- `ro` 是照片库的推荐值，Android APP 可查看但不能修改或删除原片。
+- 确实需要 Android APP 写入时才改为 `rw`。
+- 变更配置或重启 Waydroid 后，自动服务会重新建立应用可见的挂载，并处理 Android 为每个 APP 创建的独立存储命名空间；不需要再手工执行 `mount`。
+- `WAYDROID_MEDIA_SCAN_INTERVAL=1800` 会在 Waydroid 每次启动后请求一次 MediaStore 递归扫描，之后每 30 分钟刷新。改成 `300` 表示 5 分钟；改成 `0` 则禁用自动扫描。MediaProvider 会根据文件元数据跳过未变项，但仍会遍历目录，大型照片库建议使用 `1800`–`21600` 秒。
+- 已经在后台运行的 Android 相册 APP 请完全关闭后重新打开。首次扫描大型 NAS 照片库可能需要较长时间。
+
+> 如果扫描时 fnOS 的 `dmesg` 出现 `Medium Error`、`UNC` 或
+> `I/O error`，请立即把 `WAYDROID_MEDIA_SCAN_INTERVAL` 改为 `0`，
+> 先备份数据并检查硬盘。这是存储设备无法读取数据，不是
+> Android 权限问题；反复扫描可能让 I/O 进程进入 `D` 状态并拖慢关机。
+
+关闭共享时，将 `WAYDROID_MEDIA_SOURCE=` 留空并再次重建容器。
 
 ## 软件中心和 Chrome
 

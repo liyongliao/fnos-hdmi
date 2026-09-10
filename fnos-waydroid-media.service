@@ -1,0 +1,18 @@
+[Unit]
+Description=Expose one fnOS media directory to Waydroid applications
+Before=waydroid-container.service
+After=local-fs.target
+ConditionPathExists=/var/lib/waydroid
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/local/sbin/waydroid-media-bridge run
+ExecStopPost=/usr/local/sbin/waydroid-media-bridge cleanup
+Restart=always
+RestartSec=3s
+TimeoutStartSec=15s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

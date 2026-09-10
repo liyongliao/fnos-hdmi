@@ -102,7 +102,28 @@ umask 077
   printf 'REMOTE_LOGIN_PASSWORD=%q\n' "${REMOTE_LOGIN_PASSWORD:-${DESKTOP_PASSWORD:-}}"
   printf 'DESKTOP_SHARING_PORT=%q\n' "${DESKTOP_SHARING_PORT:-3390}"
   printf 'SCREEN_SHARE_MODE=%q\n' "${SCREEN_SHARE_MODE:-mirror-primary}"
+  printf 'DESKTOP_UID=%q\n' "$desktop_uid"
+  printf 'DESKTOP_GID=%q\n' "$desktop_gid"
+  printf 'WAYDROID_MEDIA_SOURCE=%q\n' "${WAYDROID_MEDIA_SOURCE:-}"
+  printf 'WAYDROID_MEDIA_TARGET=%q\n' "${WAYDROID_MEDIA_TARGET:-Pictures/nas}"
+  printf 'WAYDROID_MEDIA_MODE=%q\n' "${WAYDROID_MEDIA_MODE:-ro}"
+  printf 'WAYDROID_MEDIA_SCAN_INTERVAL=%q\n' "${WAYDROID_MEDIA_SCAN_INTERVAL:-1800}"
 } >/run/fnos-desktop.env
+
+# The bridge is opt-in. It must start before Waydroid so the /data bind mount
+# inherits the NAS submount, then it follows each Android restart and exposes
+# that folder through the app-visible /storage/emulated/0 tree.
+waydroid_media_wants=/etc/systemd/system/multi-user.target.wants/fnos-waydroid-media.service
+if [[ -n "${WAYDROID_MEDIA_SOURCE:-}" ]]; then
+  [[ -f /etc/systemd/system/fnos-waydroid-media.service ]] || {
+    echo "Missing fnos-waydroid-media.service: update compose.yaml and recreate the container." >&2
+    exit 16
+  }
+  install -d /etc/systemd/system/multi-user.target.wants
+  ln -sfn /etc/systemd/system/fnos-waydroid-media.service "$waydroid_media_wants"
+else
+  rm -f "$waydroid_media_wants"
+fi
 
 if ! [[ "$desktop_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
   echo "DESKTOP_USER is not a valid Linux account name" >&2
@@ -146,6 +167,10 @@ actual_uid="$(id -u "$desktop_user")"
 actual_gid="$(id -g "$desktop_user")"
 install -d -o "$actual_uid" -g "$actual_gid" "/home/$desktop_user"
 chown "$actual_uid:$actual_gid" "/home/$desktop_user"
+
+# Apply appliance-session defaults to persistent home directories on every
+# container creation; /etc/skel alone would not update an existing NAS volume.
+bash /usr/local/sbin/configure-tv-desktop --user "$desktop_user"
 
 # fnOS trimacl permissions are intentionally enforced on /volN even when the
 # numeric UID matches. bindfs exposes only explicitly mapped user directories.

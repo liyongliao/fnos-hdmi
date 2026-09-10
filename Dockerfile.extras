@@ -31,6 +31,12 @@ RUN set -eux; \
       curl --fail --location --retry 3 --output /tmp/google-chrome.deb "$CHROME_DEB_URL"; \
       apt-get install -y --no-install-recommends /tmp/google-chrome.deb; \
       rm -f /tmp/google-chrome.deb; \
+      # Chrome's postinst enables its APT repository. In mainland China its \
+      # CDN mirrors can momentarily disagree and break the following Waydroid \
+      # apt update with Hash Sum mismatch. Each image rebuild downloads the \
+      # current official .deb directly, so this repository is unnecessary. \
+      rm -f /etc/apt/sources.list.d/google-chrome.list \
+            /etc/apt/sources.list.d/google-chrome.sources; \
     fi; \
     if [ "$INSTALL_WAYDROID" = true ]; then \
       apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -44,3 +50,14 @@ RUN set -eux; \
     fi; \
     printf 'user_allow_other\n' >/etc/fuse.conf; \
     rm -rf /var/lib/apt/lists/*
+
+# Keep appliance policy in the final, small layer. Changing notification or
+# authorization defaults must not force Chrome and Waydroid to download again.
+COPY configure-tv-desktop.sh /usr/local/sbin/configure-tv-desktop
+COPY waydroid-media-bridge.sh /usr/local/sbin/waydroid-media-bridge
+COPY fnos-waydroid-media.service /etc/systemd/system/fnos-waydroid-media.service
+COPY appliance/ /usr/local/share/fnos/
+RUN chmod 0755 /usr/local/sbin/configure-tv-desktop \
+                 /usr/local/sbin/waydroid-media-bridge \
+ && chmod 0644 /etc/systemd/system/fnos-waydroid-media.service \
+ && /usr/local/sbin/configure-tv-desktop --system

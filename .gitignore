@@ -8,3 +8,5 @@ hdmi-*-live.pid
 *.tar.gz
 fnos-remote-login*.rdp
 waydroid-data/
+.DS_Store
+__pycache__/

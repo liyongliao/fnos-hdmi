@@ -139,13 +139,26 @@ PRIVILEGED_MODE=false
 
 ### 多 GPU / SR-IOV
 
+不同 fnOS 机器的物理显示卡可能是 `card0`，也可能是 `card1`。
+`quick-start.sh` 会优先选择拥有已连接 HDMI/DP 接口的 DRM 设备，
+并写入 `.env`：
+
+```ini
+DRM_CARD_DEVICE=/dev/dri/card1
+DRM_RENDER_DEVICE=/dev/dri/renderD128
+```
+
+这是宿主机设备名。它们会统一映射成容器内的
+`card0/renderD128`，所以不要再手工修改 `compose.yaml`。
+只有 `card1` 的机器直接重新执行 `./quick-start.sh` 即可。
+
 即使启用 `privileged`，默认：
 
 ```ini
 LIMIT_GPU_DEVICES=true
 ```
 
-容器启动时只在自己的 `/dev/dri` 中保留：
+容器启动时只在自己的 `/dev/dri` 中保留选中的显示 GPU：
 
 ```text
 card0
@@ -407,22 +420,119 @@ chmod +x resource-diagnostic.sh
 
 ## HDMI / 1080p
 
-检查：
+这一步同时适用于：
+
+- 真实显示器；
+- HDMI 虚拟显示器/欺骗器；
+- 完全不插 HDMI 的无头模式。
+
+### 1. 先确认实际 DRM 设备和 HDMI 接口
+
+不要假定一定是 `card0-HDMI-A-1`。执行：
 
 ```bash
-cat /sys/class/drm/card0-HDMI-A-1/status
-cat /sys/class/drm/card0-HDMI-A-1/modes
+for p in /sys/class/drm/card*-*/status; do
+  connector="${p%/status}"
+  printf '%-24s status=%-12s modes=' "${connector##*/}" "$(cat "$p")"
+  paste -sd, "$connector/modes" 2>/dev/null || true
+done
 ```
 
-如果显示器/虚拟 HDMI 只报告 `1024x768`，项目附带 1080p60 EDID 安装脚本：
+主板有“内侧 HDMI + 外侧 IO HDMI”时，拔掉和重新插入外侧 HDMI，
+对比哪一行在 `connected/disconnected` 之间变化。变化的
+`HDMI-A-N` 才是需要配置的接口。仅看到 fnOS 开机 Logo 不代表
+Docker 内的 GDM/GNOME 已经获得该 DRM 设备。
+
+也可以用项目脚本列出接口：
+
+```bash
+sudo ./install-fhd-edid.sh --list
+```
+
+### 2. 三种显示模式
+
+**真实显示器**
+
+如果正确接口已经是 `connected` 且 `modes` 含 `1920x1080`，
+不需要修改 GRUB。直接部署即可。
+
+**HDMI 虚拟显示器**
+
+优先让虚拟 HDMI 自己提供 1080p EDID。如果只报告 `1024x768`，
+再对它所在的接口安装项目内置 EDID：
 
 ```bash
 sudo ./install-fhd-edid.sh HDMI-A-1
 sudo reboot
-cat /sys/class/drm/card0-HDMI-A-1/modes
 ```
 
-只有最后出现 `1920x1080`，同屏 RDP/Web 才会使用 1080p。
+**完全无头：不插显示器，也不插虚拟 HDMI**
+
+必须让宿主机内核强制启用一个真实存在的 HDMI 接口。
+如果 3389/Web 需要镜像这套真实桌面，`.env` 还必须保持：
+
+```ini
+AUTO_LOGIN=true
+REMOTE_MODE=both
+SCREEN_SHARE_MODE=mirror-primary
+```
+
+先用 `--list` 确认接口名，然后执行：
+
+```bash
+sudo ./install-fhd-edid.sh HDMI-A-1
+sudo reboot
+```
+
+脚本会自动安装经校验的 1080p60 EDID，并向 GRUB 加入：
+
+```text
+drm.edid_firmware=HDMI-A-1:edid/fnos-1920x1080.bin
+video=HDMI-A-1:1920x1080@60e
+```
+
+其中最后的 `e` 表示即使没有热插拔检测也强制启用输出。
+如果无头机器有多个 HDMI，脚本会要求明确传入 `HDMI-A-N`，
+不会猜测内侧还是外侧接口。
+
+### 3. 重启后验证
+
+```bash
+cat /proc/cmdline
+sudo ./install-fhd-edid.sh --list
+grep -E '^DRM_(CARD|RENDER)_DEVICE=' .env
+sudo docker compose exec ubuntu26-gnome-hdmi loginctl list-sessions
+sudo docker compose exec ubuntu26-gnome-hdmi \
+  systemctl status fnos-desktop-sharing.service --no-pager
+```
+
+只有 `modes` 出现 `1920x1080`，且容器内存在 Ubuntu 用户的
+Wayland 会话，HDMI、3389 和 Web 同屏才能正常工作。
+
+### 4. 常见错误
+
+`MISSING /dev/dri/card0` 但机器只有 `card1`：
+
+```bash
+./quick-start.sh
+grep -E '^DRM_(CARD|RENDER)_DEVICE=' .env
+```
+
+新版会自动选择 `card1`。如果需要手动指定，也只改 `.env`：
+
+```ini
+DRM_CARD_DEVICE=/dev/dri/card1
+DRM_RENDER_DEVICE=/dev/dri/renderD128
+```
+
+`Failed to start fnos-desktop-sharing.service`：这通常是二次错误，
+表示屏幕/GDM 问题导致 Ubuntu Wayland 用户会话没有出现。
+新版会等待最多 90 秒再判定失败。诊断：
+
+```bash
+sudo docker compose exec ubuntu26-gnome-hdmi \
+  journalctl -b -u gdm3 -u fnos-desktop-sharing.service --no-pager
+```
 
 ## 3391 独立远程登录
 

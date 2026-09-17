@@ -4,6 +4,77 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "$0")" && pwd)"
 cd "$project_dir"
 
+env_value() {
+  awk -F= -v key="$1" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' .env 2>/dev/null || true
+}
+
+set_env_value() {
+  local key="$1" value="$2" tmp_env
+  tmp_env="$(mktemp "$project_dir/.env.XXXXXX")"
+  awk -v key="$key" -v value="$value" '
+    index($0, key "=") == 1 {print key "=" value; found=1; next}
+    {print}
+    END {if (!found) print key "=" value}
+  ' .env >"$tmp_env"
+  mv "$tmp_env" .env
+  chmod 0600 .env
+}
+
+detect_drm_card() {
+  local status_file card_path
+  local -a status_files card_nodes
+  shopt -s nullglob
+  status_files=(/sys/class/drm/card*-*/status)
+  # A connected HDMI/DP/eDP connector is the strongest signal that this is
+  # the physical display GPU rather than an SR-IOV virtual function.
+  for status_file in "${status_files[@]}"; do
+    [[ "$(<"$status_file")" == connected ]] || continue
+    card_path="${status_file%/status}"
+    card_path="${card_path##*/}"
+    card_path="${card_path%%-*}"
+    [[ -c "/dev/dri/$card_path" ]] && {
+      printf '/dev/dri/%s\n' "$card_path"
+      shopt -u nullglob
+      return 0
+    }
+  done
+  # In true headless mode no connector is connected. Prefer a card which at
+  # least owns physical connector objects, then fall back to the first node.
+  for status_file in "${status_files[@]}"; do
+    card_path="${status_file%/status}"
+    card_path="${card_path##*/}"
+    card_path="${card_path%%-*}"
+    [[ -c "/dev/dri/$card_path" ]] && {
+      printf '/dev/dri/%s\n' "$card_path"
+      shopt -u nullglob
+      return 0
+    }
+  done
+  card_nodes=(/dev/dri/card*)
+  ((${#card_nodes[@]} > 0)) && printf '%s\n' "${card_nodes[0]}"
+  shopt -u nullglob
+}
+
+detect_render_node() {
+  local card_device="$1" card_name card_parent render_path
+  local -a render_nodes
+  card_name="${card_device##*/}"
+  card_parent="$(readlink -f "/sys/class/drm/$card_name/device" 2>/dev/null || true)"
+  shopt -s nullglob
+  render_nodes=(/dev/dri/renderD*)
+  if [[ -n "$card_parent" ]]; then
+    for render_path in "${render_nodes[@]}"; do
+      if [[ "$(readlink -f "/sys/class/drm/${render_path##*/}/device" 2>/dev/null || true)" == "$card_parent" ]]; then
+        printf '%s\n' "$render_path"
+        shopt -u nullglob
+        return 0
+      fi
+    done
+  fi
+  ((${#render_nodes[@]} > 0)) && printf '%s\n' "${render_nodes[0]}"
+  shopt -u nullglob
+}
+
 if [[ -f .env ]]; then
   read -r -p "检测到已有 .env。是否保留现有配置并只重新部署？[Y/n] " keep_env
   if [[ ! "${keep_env:-Y}" =~ ^[Yy]$ ]]; then
@@ -84,6 +155,28 @@ else
   grep -q '^BIND_ADDRESS=' .env || echo 'BIND_ADDRESS=0.0.0.0' >>.env
 fi
 
+configured_card="$(env_value DRM_CARD_DEVICE)"
+if [[ -z "$configured_card" || "$configured_card" == auto || ! -c "$configured_card" ]]; then
+  configured_card="$(detect_drm_card)"
+  [[ -n "$configured_card" ]] || {
+    echo "未找到 /dev/dri/card* 显示设备。" >&2
+    exit 20
+  }
+  set_env_value DRM_CARD_DEVICE "$configured_card"
+fi
+
+configured_render="$(env_value DRM_RENDER_DEVICE)"
+if [[ -z "$configured_render" || "$configured_render" == auto || ! -c "$configured_render" ]]; then
+  configured_render="$(detect_render_node "$configured_card")"
+  [[ -n "$configured_render" ]] || {
+    echo "未找到与 $configured_card 配套的 /dev/dri/renderD* 设备。" >&2
+    exit 21
+  }
+  set_env_value DRM_RENDER_DEVICE "$configured_render"
+fi
+
+echo "显示 GPU：$configured_card + $configured_render（容器内映射为 card0/renderD128）"
+
 binder_major="$(awk '$2 == "binder" {print $1; exit}' /proc/devices)"
 if [[ -n "$binder_major" ]]; then
   tmp_env="$(mktemp "$project_dir/.env.XXXXXX")"
@@ -98,7 +191,10 @@ else
   echo "警告：fnOS 内核没有注册 binder 驱动，Waydroid 将无法运行。" >&2
 fi
 
-chmod +x preflight.sh prepare-guacamole.sh setup-storage.sh create-rdp-file.sh prepare-waydroid-runtime.sh
+chmod +x \
+  preflight.sh prepare-guacamole.sh setup-storage.sh create-rdp-file.sh \
+  prepare-waydroid-runtime.sh install-fhd-edid.sh hdmi-diagnostic.sh \
+  resource-diagnostic.sh network-diagnostic.sh
 ./preflight.sh
 ./setup-storage.sh
 

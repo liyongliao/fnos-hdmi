@@ -59,9 +59,9 @@ services:
       WAYDROID_MEDIA_TARGET: ${WAYDROID_MEDIA_TARGET:-Pictures/nas}
       WAYDROID_MEDIA_MODE: ${WAYDROID_MEDIA_MODE:-ro}
       WAYDROID_MEDIA_SCAN_INTERVAL: ${WAYDROID_MEDIA_SCAN_INTERVAL:-1800}
-      # In privileged mode Docker exposes every DRM node. Keep only the known
-      # physical display PF in the container /dev so Mutter does not enumerate
-      # fnOS SR-IOV VFs. Set false if another GPU is intentionally required.
+      # In privileged mode Docker exposes every DRM node. quick-start.sh maps
+      # the detected host display GPU to canonical card0/renderD128 names in
+      # the container, then hides unrelated nodes from Mutter.
       LIMIT_GPU_DEVICES: ${LIMIT_GPU_DEVICES:-true}
 
     ports:
@@ -91,8 +91,10 @@ services:
       - /run/udev:/run/udev:ro
 
     devices:
-      - /dev/dri/card0:/dev/dri/card0
-      - /dev/dri/renderD128:/dev/dri/renderD128
+      # Host numbering is not stable: some fnOS systems expose the physical
+      # display GPU as card1. Keep fixed names only inside the container.
+      - ${DRM_CARD_DEVICE:-/dev/dri/card0}:/dev/dri/card0
+      - ${DRM_RENDER_DEVICE:-/dev/dri/renderD128}:/dev/dri/renderD128
       - /dev/fuse:/dev/fuse
 
     # These rules matter when PRIVILEGED_MODE=false. In privileged mode Docker

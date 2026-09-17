@@ -16,7 +16,7 @@ mkdir -p "$state_dir"
 
 connector_status() {
   local status_file
-  for status_file in /sys/class/drm/card0-*/status; do
+  for status_file in /sys/class/drm/card*-*/status; do
     [[ -e "$status_file" ]] || continue
     printf '%s=' "${status_file%/status}"
     cat "$status_file"

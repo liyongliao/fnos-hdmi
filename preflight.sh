@@ -2,7 +2,16 @@
 set -eu
 
 failed=0
-for path in /dev/dri/card0 /dev/dri/renderD128 /dev/input /dev/snd /run/udev /sys/fs/cgroup; do
+drm_card=/dev/dri/card0
+drm_render=/dev/dri/renderD128
+if [ -f .env ]; then
+  configured_card="$(awk -F= '$1 == "DRM_CARD_DEVICE" {print $2; exit}' .env)"
+  configured_render="$(awk -F= '$1 == "DRM_RENDER_DEVICE" {print $2; exit}' .env)"
+  drm_card="${configured_card:-$drm_card}"
+  drm_render="${configured_render:-$drm_render}"
+fi
+
+for path in "$drm_card" "$drm_render" /dev/input /dev/snd /run/udev /sys/fs/cgroup; do
   if [ -e "$path" ]; then
     echo "OK      $path"
   else
@@ -14,6 +23,27 @@ done
 echo
 echo "GPU devices:"
 ls -l /dev/dri 2>/dev/null || true
+echo "Selected display devices: $drm_card + $drm_render"
+
+echo
+echo "DRM display connectors:"
+connected_count=0
+connector_count=0
+for status_file in /sys/class/drm/card*-*/status; do
+  [ -e "$status_file" ] || continue
+  connector_count=$((connector_count + 1))
+  connector_name="${status_file%/status}"
+  connector_name="${connector_name##*/}"
+  connector_status="$(cat "$status_file")"
+  [ "$connector_status" = connected ] && connected_count=$((connected_count + 1))
+  printf '%-24s %s\n' "$connector_name" "$connector_status"
+done
+if [ "$connector_count" -eq 0 ]; then
+  echo "MISSING no HDMI/DP/eDP connector is exposed by the selected GPU driver"
+  failed=1
+elif [ "$connected_count" -eq 0 ]; then
+  echo "WARN    no connector is active; configure the README headless EDID step before expecting HDMI/RDP screen sharing"
+fi
 
 echo
 echo "Sound devices:"
@@ -56,11 +86,11 @@ else
   echo "OK      scoped capability/device mode is enabled"
 fi
 
-if grep -q '/dev/dri/card0:/dev/dri/card0' compose.yaml && \
-   grep -q '/dev/dri/renderD128:/dev/dri/renderD128' compose.yaml; then
-  echo "OK      card0/renderD128 explicit mappings are present"
+if grep -Fq '${DRM_CARD_DEVICE:-/dev/dri/card0}:/dev/dri/card0' compose.yaml && \
+   grep -Fq '${DRM_RENDER_DEVICE:-/dev/dri/renderD128}:/dev/dri/renderD128' compose.yaml; then
+  echo "OK      selected host DRM devices map to canonical card0/renderD128 inside the container"
 else
-  echo "MISSING explicit card0/renderD128 mappings"
+  echo "MISSING variable DRM device mappings in compose.yaml"
   failed=1
 fi
 

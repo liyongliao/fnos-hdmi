@@ -14,18 +14,30 @@ desktop_home="$(getent passwd "$desktop_user" | cut -d: -f6)"
 runtime_dir="/run/user/$desktop_uid"
 bus_address="unix:path=$runtime_dir/bus"
 
-session_id="$(loginctl list-sessions --no-legend | awk -v uid="$desktop_uid" '$2 == uid && $4 != "-" {print $1; exit}')"
+# graphical.target and this oneshot can race GDM automatic login. Wait for the
+# real seat0 Wayland session instead of logging a misleading FAILED line during
+# an otherwise healthy boot. A genuinely missing KMS output still fails with a
+# useful headless/DRM hint after the grace period.
+session_id=
+session_type=
+for _ in {1..45}; do
+  session_id="$(loginctl list-sessions --no-legend | awk -v uid="$desktop_uid" '$2 == uid && $4 != "-" {print $1; exit}')"
+  if [[ -n "$session_id" ]]; then
+    session_type="$(loginctl show-session "$session_id" -p Type --value)"
+    [[ "$session_type" == wayland && -S "$runtime_dir/bus" ]] && break
+  fi
+  sleep 2
+done
 if [[ -z "$session_id" ]]; then
-  echo "No active HDMI session for $desktop_user. Log in on HDMI first." >&2
+  echo "No seat0 desktop session for $desktop_user. Check AUTO_LOGIN and the host DRM/virtual-HDMI configuration." >&2
   exit 10
 fi
-session_type="$(loginctl show-session "$session_id" -p Type --value)"
 if [[ "$session_type" != wayland ]]; then
-  echo "Session $session_id is $session_type, expected wayland." >&2
+  echo "Session $session_id is $session_type, expected wayland. Check GDM and the selected DRM device." >&2
   exit 11
 fi
 if [[ ! -S "$runtime_dir/bus" ]]; then
-  echo "The user D-Bus is unavailable. Log out and password-login again." >&2
+  echo "The user D-Bus is unavailable after waiting for automatic login." >&2
   exit 12
 fi
 

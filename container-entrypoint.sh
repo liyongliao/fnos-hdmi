@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # privileged=true exposes all host DRM nodes. On fnOS systems with i915 SR-IOV
-# VFs this can confuse GDM/Mutter. Removing device nodes here affects only the
-# container's private /dev, never the fnOS host. Users can disable this filter
-# with LIMIT_GPU_DEVICES=false when they intentionally need another GPU.
+# VFs this can confuse GDM/Mutter. quick-start.sh maps the chosen host devices
+# to canonical card0/renderD128 names inside the container. Removing all other
+# nodes here affects only the container's private /dev, never the fnOS host.
 if [[ "${LIMIT_GPU_DEVICES:-true}" == true && -d /dev/dri ]]; then
   shopt -s nullglob
   for node in /dev/dri/card*; do

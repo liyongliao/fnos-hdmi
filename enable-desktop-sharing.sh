@@ -21,7 +21,14 @@ bus_address="unix:path=$runtime_dir/bus"
 session_id=
 session_type=
 for _ in {1..45}; do
-  session_id="$(loginctl list-sessions --no-legend | awk -v uid="$desktop_uid" '$2 == uid && $4 != "-" {print $1; exit}')"
+  session_id=
+  while read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    [[ "$(loginctl show-session "$candidate" -p Seat --value 2>/dev/null)" == seat0 ]] || continue
+    [[ "$(loginctl show-session "$candidate" -p Type --value 2>/dev/null)" == wayland ]] || continue
+    session_id=$candidate
+    break
+  done < <(loginctl list-sessions --no-legend | awk -v uid="$desktop_uid" '$2 == uid {print $1}')
   if [[ -n "$session_id" ]]; then
     session_type="$(loginctl show-session "$session_id" -p Type --value)"
     [[ "$session_type" == wayland && -S "$runtime_dir/bus" ]] && break

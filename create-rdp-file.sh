@@ -2,13 +2,13 @@
 set -euo pipefail
 
 server="${1:-}"
-port="${2:-3391}"
+port="${2:-3389}"
 output="${3:-fnos-remote-login.rdp}"
 username="${4:-ubuntu}"
 
 if [[ -z "$server" ]]; then
   echo "用法: $0 <fnOS-IP> [端口] [输出文件] [用户名]" >&2
-  echo "示例: $0 192.168.31.100 3391 fnos-remote-login.rdp ubuntu" >&2
+  echo "示例: $0 192.168.31.100 3389 fnos-remote-login.rdp ubuntu" >&2
   exit 2
 fi
 

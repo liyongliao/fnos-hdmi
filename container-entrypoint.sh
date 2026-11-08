@@ -1,19 +1,51 @@
 #!/bin/bash
 set -euo pipefail
 
-# privileged=true exposes all host DRM nodes. On fnOS systems with i915 SR-IOV
-# VFs this can confuse GDM/Mutter. quick-start.sh maps the chosen host devices
-# to canonical card0/renderD128 names inside the container. Removing all other
-# nodes here affects only the container's private /dev, never the fnOS host.
+# Use the kernel's node names so udev/seat0 and Mutter see the same devices.
+# Re-evaluate at boot: i915 PF and VF card numbers can swap across reboots.
+select_display_gpu() {
+  local output card render score best=-1 parent
+  for output in /sys/class/drm/card*-*/status; do
+    [[ -r "$output" ]] || continue
+    output=${output%/status}
+    card=${output##*/}
+    card=/dev/dri/${card%%-*}
+    [[ -c "$card" ]] || continue
+    score=0
+    if [[ $(<"$output/status") == connected ]]; then
+      score=2
+      [[ -n "$(head -c 1 "$output/edid" 2>/dev/null | od -An -tu1)" ]] && score=4
+      [[ -r "$output/enabled" && $(<"$output/enabled") == enabled ]] && ((score+=4))
+    fi
+    [[ "$card" != "${DRM_CARD_DEVICE:-}" ]] || ((score+=1))
+    (( score > best )) || continue
+    parent=/sys/class/drm/${card##*/}/device
+    for render in /dev/dri/renderD*; do
+      [[ -c "$render" && "$parent" -ef "/sys/class/drm/${render##*/}/device" ]] || continue
+      display_card=$card
+      display_render=$render
+      best=$score
+      break
+    done
+  done
+  (( best >= 0 ))
+}
+
+if [[ ${1:-} == --detect-display-gpu ]]; then
+  select_display_gpu || { echo "No visible display GPU with a matching render node" >&2; exit 20; }
+  printf '%s %s\n' "$display_card" "$display_render"
+  exit 0
+fi
+
 if [[ "${LIMIT_GPU_DEVICES:-true}" == true && -d /dev/dri ]]; then
-  shopt -s nullglob
-  for node in /dev/dri/card*; do
-    [[ "$node" == /dev/dri/card0 ]] || rm -f "$node" || true
-  done
-  for node in /dev/dri/renderD*; do
-    [[ "$node" == /dev/dri/renderD128 ]] || rm -f "$node" || true
-  done
-  shopt -u nullglob
+  if select_display_gpu; then
+    echo "Display GPU: $display_card + $display_render"
+    for node in /dev/dri/card* /dev/dri/renderD*; do
+      [[ "$node" == "$display_card" || "$node" == "$display_render" ]] || rm -f "$node"
+    done
+  else
+    echo "No DRM connector/render pair found. Check device mappings with quick-start.sh." >&2
+  fi
 fi
 
 if [[ -f /usr/local/sbin/configure-waydroid.py ]]; then
@@ -146,7 +178,7 @@ usermod -aG sudo,admin,audio,video,input,render "$desktop_user"
 
 # Device group numbers come from fnOS and may map to different group names in
 # Ubuntu. Add the user to groups owning the actual visible devices before GDM.
-for device_path in /dev/dri/card0 /dev/dri/renderD128 /dev/input/event0 /dev/snd/controlC0; do
+for device_path in /dev/dri/card* /dev/dri/renderD* /dev/input/event0 /dev/snd/controlC0; do
   [[ -e "$device_path" ]] || continue
   device_gid="$(stat -c '%g' "$device_path")"
   device_group="$(getent group "$device_gid" | cut -d: -f1 || true)"

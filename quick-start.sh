@@ -20,60 +20,6 @@ set_env_value() {
   chmod 0600 .env
 }
 
-detect_drm_card() {
-  local status_file card_path
-  local -a status_files card_nodes
-  shopt -s nullglob
-  status_files=(/sys/class/drm/card*-*/status)
-  # A connected HDMI/DP/eDP connector is the strongest signal that this is
-  # the physical display GPU rather than an SR-IOV virtual function.
-  for status_file in "${status_files[@]}"; do
-    [[ "$(<"$status_file")" == connected ]] || continue
-    card_path="${status_file%/status}"
-    card_path="${card_path##*/}"
-    card_path="${card_path%%-*}"
-    [[ -c "/dev/dri/$card_path" ]] && {
-      printf '/dev/dri/%s\n' "$card_path"
-      shopt -u nullglob
-      return 0
-    }
-  done
-  # In true headless mode no connector is connected. Prefer a card which at
-  # least owns physical connector objects, then fall back to the first node.
-  for status_file in "${status_files[@]}"; do
-    card_path="${status_file%/status}"
-    card_path="${card_path##*/}"
-    card_path="${card_path%%-*}"
-    [[ -c "/dev/dri/$card_path" ]] && {
-      printf '/dev/dri/%s\n' "$card_path"
-      shopt -u nullglob
-      return 0
-    }
-  done
-  card_nodes=(/dev/dri/card*)
-  ((${#card_nodes[@]} > 0)) && printf '%s\n' "${card_nodes[0]}"
-  shopt -u nullglob
-}
-
-detect_render_node() {
-  local card_device="$1" card_name card_parent render_path
-  local -a render_nodes
-  card_name="${card_device##*/}"
-  card_parent="$(readlink -f "/sys/class/drm/$card_name/device" 2>/dev/null || true)"
-  shopt -s nullglob
-  render_nodes=(/dev/dri/renderD*)
-  if [[ -n "$card_parent" ]]; then
-    for render_path in "${render_nodes[@]}"; do
-      if [[ "$(readlink -f "/sys/class/drm/${render_path##*/}/device" 2>/dev/null || true)" == "$card_parent" ]]; then
-        printf '%s\n' "$render_path"
-        shopt -u nullglob
-        return 0
-      fi
-    done
-  fi
-  ((${#render_nodes[@]} > 0)) && printf '%s\n' "${render_nodes[0]}"
-  shopt -u nullglob
-}
 
 if [[ -f .env ]]; then
   read -r -p "检测到已有 .env。是否保留现有配置并只重新部署？[Y/n] " keep_env
@@ -155,27 +101,11 @@ else
   grep -q '^BIND_ADDRESS=' .env || echo 'BIND_ADDRESS=0.0.0.0' >>.env
 fi
 
-configured_card="$(env_value DRM_CARD_DEVICE)"
-if [[ -z "$configured_card" || "$configured_card" == auto || ! -c "$configured_card" ]]; then
-  configured_card="$(detect_drm_card)"
-  [[ -n "$configured_card" ]] || {
-    echo "未找到 /dev/dri/card* 显示设备。" >&2
-    exit 20
-  }
-  set_env_value DRM_CARD_DEVICE "$configured_card"
-fi
-
-configured_render="$(env_value DRM_RENDER_DEVICE)"
-if [[ -z "$configured_render" || "$configured_render" == auto || ! -c "$configured_render" ]]; then
-  configured_render="$(detect_render_node "$configured_card")"
-  [[ -n "$configured_render" ]] || {
-    echo "未找到与 $configured_card 配套的 /dev/dri/renderD* 设备。" >&2
-    exit 21
-  }
-  set_env_value DRM_RENDER_DEVICE "$configured_render"
-fi
-
-echo "显示 GPU：$configured_card + $configured_render（容器内映射为 card0/renderD128）"
+display_pair="$(DRM_CARD_DEVICE="$(env_value DRM_CARD_DEVICE)" bash ./container-entrypoint.sh --detect-display-gpu)"
+read -r configured_card configured_render <<<"$display_pair"
+set_env_value DRM_CARD_DEVICE "$configured_card"
+set_env_value DRM_RENDER_DEVICE "$configured_render"
+echo "显示 GPU：$configured_card + $configured_render"
 
 binder_major="$(awk '$2 == "binder" {print $1; exit}' /proc/devices)"
 if [[ -n "$binder_major" ]]; then
@@ -280,22 +210,27 @@ server_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '
 ')"
 server_ip="${server_ip:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
 server_ip="${server_ip:-fnOS-IP}"
+login_port="$(env_value REMOTE_LOGIN_PORT)"
+login_port="${login_port:-3389}"
+sharing_port="$(env_value DESKTOP_SHARING_PORT)"
+web_port="$(env_value WEB_PORT)"
 if [[ "$server_ip" != "fnOS-IP" ]]; then
   desktop_user="$(awk -F= '$1 == "DESKTOP_USER" {print $2; exit}' .env)"
   desktop_user="${desktop_user:-ubuntu}"
-  ./create-rdp-file.sh "$server_ip" 3391 "fnos-remote-login-$server_ip.rdp" "$desktop_user"
+  login_user="$(env_value REMOTE_LOGIN_USER)"
+  ./create-rdp-file.sh "$server_ip" "$login_port" "fnos-remote-login-$server_ip.rdp" "${login_user:-$desktop_user}"
 fi
 
 echo
 echo "部署完成："
 echo "  privileged 高兼容模式：$privileged_mode"
 echo "  Ubuntu/Docker 外网：    $network_status"
-echo "  Windows/macOS 同屏桌面：$server_ip:3389"
-echo "  GNOME 独立远程登录：   $server_ip:3391"
-echo "  网页桌面：             http://$server_ip:8080/"
+echo "  Windows/macOS 同屏桌面：$server_ip:${sharing_port:-3390}"
+echo "  GNOME 独立远程登录：   $server_ip:$login_port"
+echo "  网页桌面：             http://$server_ip:${web_port:-8080}/"
 echo "  NAS 文件：Ubuntu 主文件夹中的 NAS-vol1、NAS-vol2……"
 if [[ "$server_ip" != "fnOS-IP" ]]; then
-  echo "  3391 专用连接文件：     $project_dir/fnos-remote-login-$server_ip.rdp"
+  echo "  远程登录连接文件：     $project_dir/fnos-remote-login-$server_ip.rdp"
 fi
 
 if [[ "$waydroid_requested" == "true" ]]; then

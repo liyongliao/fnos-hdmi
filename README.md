@@ -6,7 +6,7 @@
 - 无显示器也能启动
 - Windows/macOS 使用 RDP
 - 手机、平板、电脑使用浏览器远程桌面
-- HDMI、3389、网页端操作同一个真实桌面
+- HDMI/DP 与 3390 共享现场桌面；3389 和网页端可独立远程登录
 - 自动映射 `/vol1`、`/vol2` 等 fnOS 存储
 - 可选 GNOME 软件中心、Google Chrome
 - 可选 Waydroid / GAPPS
@@ -66,18 +66,35 @@ chmod +x quick-start.sh
 
 | 地址 | 用途 | 画面 |
 | --- | --- | --- |
-| `192.168.31.100:3389` | 推荐 RDP | 与 HDMI 同一桌面 |
-| `192.168.31.100:3390` | 备用 RDP | 与 3389 相同 |
-| `192.168.31.100:3391` | GNOME Remote Login | 独立 Wayland 登录会话 |
-| `http://192.168.31.100:8080/` | 浏览器桌面 | 与 HDMI 同一桌面 |
+| `192.168.31.100:3389` | GNOME 远程登录 | 登录独立 Wayland 会话 |
+| `192.168.31.100:3390` | GNOME 桌面共享 | 协助操作 HDMI/DP 上已登录的桌面 |
+| `http://192.168.31.100:8080/` | 浏览器远程登录 | Guacamole 连接容器内的 3389，可在无头环境登录 |
 
-默认账号：
+**无头使用**：打开网页或用 Windows App 连接 NAS 的 3389。默认模式下，两者都通过 GNOME 远程登录创建或接入远程会话，可以跳过后面的虚拟 HDMI 配置。第一层使用 `REMOTE_LOGIN_USER` 和 `REMOTE_LOGIN_PASSWORD`；看到 Ubuntu 账号选择界面后，选择系统账号并输入桌面密码。安装向导默认将两层密码设为相同。要查看家人正在电视上操作的画面，连接 3390。
 
-```text
-ubuntu
-```
+### 从旧版 3391 迁移
 
-密码为安装向导中设置的 `DESKTOP_PASSWORD`。
+旧版把宿主机 3389 和 3390 都指向桌面共享，独立登录使用 3391。在 fnOS 的项目目录更新项目文件，保留自己的 `.env`、`compose.override.yaml` 和数据目录，然后按以下顺序操作。
+
+1. 保存桌面上的工作。若进入容器后手动安装过软件，可先用下面的命令将可写层保存为本地镜像，并记下输出的镜像名。挂载的主目录和 Waydroid 数据目录独立于这份快照，升级时沿用原路径。快照可能包含登录配置，请仅在自己的 NAS 上使用。
+
+   ```bash
+   snapshot="fnos-desktop-local:before-rdp-$(date +%Y%m%d-%H%M%S)"
+   sudo docker commit ubuntu26-gnome-hdmi "$snapshot" && echo "$snapshot"
+   ```
+
+2. 编辑 `.env`，设置 `REMOTE_LOGIN_PORT=3389`、`DESKTOP_SHARING_PORT=3390`，删除旧的 `RDP_PORT`。若上一步创建了快照，把 `DESKTOP_IMAGE` 改为输出的镜像名。如果旧配置里没有 `DRM_CARD_DEVICE` 和 `DRM_RENDER_DEVICE`，运行 `bash container-entrypoint.sh --detect-display-gpu`，按输出顺序把两个设备路径分别填入这两项。
+
+3. 重新生成网页连接并应用端口映射。以下命令在 fnOS 上运行；容器重建时当前远程连接会断开。
+
+   ```bash
+   bash prepare-guacamole.sh &&
+     sudo docker compose --profile web config --quiet &&
+     sudo docker compose --profile web up -d &&
+     sudo docker port ubuntu26-gnome-hdmi
+   ```
+
+4. 核对输出中容器的 `3389/tcp` 对应宿主机 3389、`3390/tcp` 对应宿主机 3390。Windows App 中保存的旧 3391 连接也要改为 3389；用项目生成的连接文件时，重新运行 `bash create-rdp-file.sh 你的NAS地址` 后导入。
 
 默认：
 
@@ -148,9 +165,7 @@ DRM_CARD_DEVICE=/dev/dri/card1
 DRM_RENDER_DEVICE=/dev/dri/renderD128
 ```
 
-这是宿主机设备名。它们会统一映射成容器内的
-`card0/renderD128`，所以不要再手工修改 `compose.yaml`。
-只有 `card1` 的机器直接重新执行 `./quick-start.sh` 即可。
+容器沿用宿主机的 DRM 设备名，GNOME 可以按 udev 提供的路径打开显卡。重新执行 `./quick-start.sh` 会检测当前有显示接口的 GPU，并选择同一 PCI 设备的 render 节点。
 
 即使启用 `privileged`，默认：
 
@@ -158,14 +173,7 @@ DRM_RENDER_DEVICE=/dev/dri/renderD128
 LIMIT_GPU_DEVICES=true
 ```
 
-容器启动时只在自己的 `/dev/dri` 中保留选中的显示 GPU：
-
-```text
-card0
-renderD128
-```
-
-避免 GNOME/Mutter 枚举 fnOS 的 i915 SR-IOV VF。这个动作只修改容器自己的 `/dev`，不会删除宿主机设备。
+容器启动时会再次识别 HDMI、DP 等接口，优先使用已启用的连接，在容器自己的 `/dev/dri` 中保留对应显卡和配套的 render 节点。
 
 确实需要其他 GPU 时：
 
@@ -426,7 +434,21 @@ chmod +x resource-diagnostic.sh
 - HDMI 虚拟显示器/欺骗器；
 - 完全不插 HDMI 的无头模式。
 
-### 1. 先确认实际 DRM 设备和 HDMI 接口
+### 从 HDMI 换到 DisplayPort
+
+接上 DP 显示器并选择显示器的 DP 输入源。在项目目录执行 `bash container-entrypoint.sh --detect-display-gpu` 可查看选中的显卡与 render 节点。下方列表中的 `card1-DP-1` 表示 DP 接在 `card1` 上。真实显示器已报告正确分辨率时可直接使用其 EDID。旧的强制 HDMI 参数会使拔线的 HDMI 仍显示 connected，可结合 DP 的 modes、enabled 和 GNOME「设置 → 显示器」核对主屏。
+
+网页能打开 Guacamole 但连接桌面失败时，检查 GNOME 的 3389 远程登录服务及第一层凭据 `REMOTE_LOGIN_USER`、`REMOTE_LOGIN_PASSWORD`。进入 GDM 后使用 Ubuntu 系统账号。
+
+如果 3390 已有完整桌面，实物屏幕仍黑，请在 **3390 同屏桌面** 的终端运行 `gdctl show`。查看物理接口的 Current mode，以及 Logical monitors 下哪台显示器标为 Primary。可在「设置 → 显示器」中暂时只启用真实显示器，选择它支持的 1920×1080、60 Hz；看到实物画面后再保留配置。也可用显示器自身的「信息」菜单核对输入接口和收到的分辨率。
+
+若桌面容器已停止，SSH 执行 `cat /sys/class/tty/tty0/active` 和 `systemctl is-active getty@tty1`。如果已回到 tty1 且 getty 活跃，实物屏仍黑，应继续检查宿主机显示驱动和 DP 链路。可用 `sudo journalctl -k -b --no-pager | grep -Ei 'i915|drm|link train|underrun'` 查看本次启动记录。
+
+**已验证的 DP 黑屏案例**：一台曾用 HDMI 无头启动的 fnOS，改接 DP 后开机过程有画面，启动结束后黑屏。即使 Docker 未启动，现象也能复现。该机的 `/proc/cmdline` 仍含 `video=HDMI-A-1:1920x1080@60e`。在 GRUB 菜单选中 fnOS，按 `e`，仅从 `linux` 行删除这一个参数，按 `Ctrl+X` 临时启动后，现场恢复了画面。
+
+如果你的实物屏也通过了这项测试，且日常无头访问走 3389 或网页，可以备份 `/etc/default/grub`，从 `GRUB_CMDLINE_LINUX_DEFAULT` 删除同一参数，执行 `sudo update-grub`。下次启动后用 `cat /proc/cmdline` 核对。只在 GRUB 菜单中按 `e` 的改动仅对当次启动有效。
+
+### 1. 先确认实际 DRM 设备和显示接口
 
 不要假定一定是 `card0-HDMI-A-1`。执行：
 
@@ -468,8 +490,7 @@ sudo reboot
 
 **完全无头：不插显示器，也不插虚拟 HDMI**
 
-必须让宿主机内核强制启用一个真实存在的 HDMI 接口。
-如果 3389/Web 需要镜像这套真实桌面，`.env` 还必须保持：
+仅使用 3389 或默认网页远程登录时，可跳过虚拟 HDMI 配置。若需要在无头时用 3390 共享现场桌面，可以配置虚拟 HDMI，并在 `.env` 中设置：
 
 ```ini
 AUTO_LOGIN=true
@@ -506,8 +527,7 @@ sudo docker compose exec ubuntu26-gnome-hdmi \
   systemctl status fnos-desktop-sharing.service --no-pager
 ```
 
-只有 `modes` 出现 `1920x1080`，且容器内存在 Ubuntu 用户的
-Wayland 会话，HDMI、3389 和 Web 同屏才能正常工作。
+`modes` 列出接口支持的模式。验证 1080p 时，用同屏桌面中的 `gdctl show` 查看当前模式，再现场确认显示器有画面。
 
 ### 4. 常见错误
 
@@ -534,9 +554,9 @@ sudo docker compose exec ubuntu26-gnome-hdmi \
   journalctl -b -u gdm3 -u fnos-desktop-sharing.service --no-pager
 ```
 
-## 3391 独立远程登录
+## 3389 独立远程登录
 
-3391 是 GNOME Remote Login，不是 3389 的同屏共享。
+3389 提供 GNOME Remote Login，3390 提供桌面共享。
 
 生成专用 RDP 文件：
 
@@ -553,14 +573,14 @@ REMOTE_MODE=login
 AUTO_LOGIN=false
 ```
 
-如果 HDMI、网页、Windows 要共享同一个真实桌面：
+如果同时需要网页独立登录，以及用 Windows 协助操作现场桌面：
 
 ```ini
 REMOTE_MODE=both
 AUTO_LOGIN=true
 ```
 
-日常连接 3389。
+连接 3389 进行远程登录，连接 3390 查看现场画面。仅在 `REMOTE_MODE=share` 时，网页自动改用 3390。
 
 ## 日常管理
 
@@ -610,7 +630,7 @@ journalctl -u waydroid-container.service -b --no-pager | tail -100
 ### 远程端口
 
 ```bash
-for port in 3389 3390 3391 8080; do
+for port in 3389 3390 8080; do
   timeout 2 bash -c "</dev/tcp/127.0.0.1/$port" \
     && echo "$port open" || echo "$port closed"
 done

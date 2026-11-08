@@ -59,17 +59,15 @@ services:
       WAYDROID_MEDIA_TARGET: ${WAYDROID_MEDIA_TARGET:-Pictures/nas}
       WAYDROID_MEDIA_MODE: ${WAYDROID_MEDIA_MODE:-ro}
       WAYDROID_MEDIA_SCAN_INTERVAL: ${WAYDROID_MEDIA_SCAN_INTERVAL:-1800}
-      # In privileged mode Docker exposes every DRM node. quick-start.sh maps
-      # the detected host display GPU to canonical card0/renderD128 names in
-      # the container, then hides unrelated nodes from Mutter.
+      # Prefer the selected card when multiple outputs have equal priority.
+      DRM_CARD_DEVICE: ${DRM_CARD_DEVICE:-/dev/dri/card0}
       LIMIT_GPU_DEVICES: ${LIMIT_GPU_DEVICES:-true}
 
     ports:
       # BIND_ADDRESS=0.0.0.0 exposes services on all fnOS interfaces. Change it
       # to a LAN/VPN IP when you want to bind more narrowly.
-      - "${BIND_ADDRESS:-0.0.0.0}:${RDP_PORT:-3389}:3390"
       - "${BIND_ADDRESS:-0.0.0.0}:${DESKTOP_SHARING_PORT:-3390}:3390"
-      - "${BIND_ADDRESS:-0.0.0.0}:${REMOTE_LOGIN_PORT:-3391}:3389"
+      - "${BIND_ADDRESS:-0.0.0.0}:${REMOTE_LOGIN_PORT:-3389}:3389"
 
     volumes:
       - ${DESKTOP_HOME:-/vol1/1000/docker/ubuntu}:/home/${DESKTOP_USER:-ubuntu}
@@ -91,10 +89,9 @@ services:
       - /run/udev:/run/udev:ro
 
     devices:
-      # Host numbering is not stable: some fnOS systems expose the physical
-      # display GPU as card1. Keep fixed names only inside the container.
-      - ${DRM_CARD_DEVICE:-/dev/dri/card0}:/dev/dri/card0
-      - ${DRM_RENDER_DEVICE:-/dev/dri/renderD128}:/dev/dri/renderD128
+      # udev reports host paths even inside the container.
+      - ${DRM_CARD_DEVICE:-/dev/dri/card0}:${DRM_CARD_DEVICE:-/dev/dri/card0}
+      - ${DRM_RENDER_DEVICE:-/dev/dri/renderD128}:${DRM_RENDER_DEVICE:-/dev/dri/renderD128}
       - /dev/fuse:/dev/fuse
 
     # These rules matter when PRIVILEGED_MODE=false. In privileged mode Docker

@@ -16,8 +16,23 @@ set +a
 
 desktop_user="${DESKTOP_USER:-ubuntu}"
 desktop_password="${DESKTOP_PASSWORD:-}"
-web_user="${WEB_USER:-$desktop_user}"
-web_password="${WEB_PASSWORD:-$desktop_password}"
+case "${REMOTE_MODE:-both}" in
+  both|login)
+    target_port=3389
+    connection_name="GNOME Remote Login"
+    rdp_user="${REMOTE_LOGIN_USER:-$desktop_user}"
+    rdp_password="${REMOTE_LOGIN_PASSWORD:-$desktop_password}"
+    ;;
+  share)
+    target_port=3390
+    connection_name="GNOME Desktop Sharing"
+    rdp_user="$desktop_user"
+    rdp_password="$desktop_password"
+    ;;
+  *) echo "Invalid REMOTE_MODE" >&2; exit 2 ;;
+esac
+web_user="${WEB_USER:-$rdp_user}"
+web_password="${WEB_PASSWORD:-$rdp_password}"
 
 if [[ -z "$desktop_password" || -z "$web_password" ]]; then
   echo "DESKTOP_PASSWORD and WEB_PASSWORD must not be empty." >&2
@@ -31,11 +46,10 @@ xml_escape() {
 }
 
 web_user_xml="$(xml_escape "$web_user")"
-desktop_user_xml="$(xml_escape "$desktop_user")"
 web_password_md5="$(printf '%s' "$web_password" | md5sum | awk '{print $1}')"
 
-if [[ "$web_user" != "$desktop_user" || "$web_password" != "$desktop_password" ]]; then
-  echo "The lightweight web profile requires WEB_USER/WEB_PASSWORD to match the desktop account." >&2
+if [[ "$web_user" != "$rdp_user" || "$web_password" != "$rdp_password" ]]; then
+  echo "WEB_USER/WEB_PASSWORD must match the selected RDP service credentials." >&2
   echo "Use Guacamole's database authentication before exposing it outside the LAN." >&2
   exit 4
 fi
@@ -45,10 +59,10 @@ umask 077
 cat >"$project_dir/guacamole/user-mapping.xml" <<EOF
 <user-mapping>
   <authorize username="$web_user_xml" password="$web_password_md5" encoding="md5">
-    <connection name="GNOME Wayland Desktop">
+    <connection name="$connection_name">
       <protocol>rdp</protocol>
       <param name="hostname">ubuntu26-gnome-hdmi</param>
-      <param name="port">3390</param>
+      <param name="port">$target_port</param>
       <param name="username">\${GUAC_USERNAME}</param>
       <param name="password">\${GUAC_PASSWORD}</param>
       <param name="security">any</param>

@@ -86,9 +86,9 @@ else
   echo "OK      scoped capability/device mode is enabled"
 fi
 
-if grep -Fq '${DRM_CARD_DEVICE:-/dev/dri/card0}:/dev/dri/card0' compose.yaml && \
-   grep -Fq '${DRM_RENDER_DEVICE:-/dev/dri/renderD128}:/dev/dri/renderD128' compose.yaml; then
-  echo "OK      selected host DRM devices map to canonical card0/renderD128 inside the container"
+if grep -Fq '${DRM_CARD_DEVICE:-/dev/dri/card0}:${DRM_CARD_DEVICE:-/dev/dri/card0}' compose.yaml && \
+   grep -Fq '${DRM_RENDER_DEVICE:-/dev/dri/renderD128}:${DRM_RENDER_DEVICE:-/dev/dri/renderD128}' compose.yaml; then
+  echo "OK      container device paths match the host DRM paths"
 else
   echo "MISSING variable DRM device mappings in compose.yaml"
   failed=1
